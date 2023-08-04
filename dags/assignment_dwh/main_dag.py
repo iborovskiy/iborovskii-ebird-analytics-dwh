@@ -34,7 +34,6 @@ dag = DAG(
     default_args=default_args,
     description='Assignment demo-ETL',
     schedule_interval=timedelta(hours=1),
-    #schedule_interval=timedelta(minutes=10),
     catchup=False,
     on_failure_callback = etl_log.on_DAG_error_alert,
 )

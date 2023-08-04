@@ -5,7 +5,11 @@ import numpy as np
 
 from airflow.hooks.postgres_hook import PostgresHook
 
-def load_dwh_from_stg(*args, **kwargs):
+# Select model creation mode
+DWH_INTERNAL_MODEL = True
+
+
+def load_dwh_from_stg_inside(*args, **kwargs):
     # Get cursors to DBs
     pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
     pgs_stg_hook = PostgresHook(postgres_conn_id="postgres_stg_conn")
@@ -27,9 +31,7 @@ def load_dwh_from_stg(*args, **kwargs):
     print('Stored to dwh_fact_observation - ', len(stg_new_frame), 'rows.')
 
 
-
-
-def load_dwh_from_stg_old(*args, **kwargs):
+def load_dwh_from_stg_outside(*args, **kwargs):
     # Get cursors to DBs
     pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
     pgs_stg_hook = PostgresHook(postgres_conn_id="postgres_stg_conn")
@@ -98,3 +100,10 @@ def load_dwh_from_stg_old(*args, **kwargs):
     tmp_water_mark = pgs_dwh_hook.get_records("SELECT MAX(obsdt) FROM dwh_fact_observation")
     pgs_dwh_hook.run("UPDATE high_water_mark SET current_high_ts = %s WHERE table_id = 'dwh_fact_observation'",
                      parameters = (tmp_water_mark[0][0],))
+
+
+def load_dwh_from_stg(*args, **kwargs):
+    if DWH_INTERNAL_MODEL:
+        return load_dwh_from_stg_inside(*args, **kwargs)
+    else:
+        return load_dwh_from_stg_outside(*args, **kwargs)
