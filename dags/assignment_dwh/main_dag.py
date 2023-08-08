@@ -30,9 +30,9 @@ default_args = {
 }
 
 dag = DAG(
-    dag_id='assignment-etl',
+    dag_id='ebird-analytics-dwh',
     default_args=default_args,
-    description='Assignment demo-ETL',
+    description='Analytics DWH for the eBird observations',
     schedule_interval=timedelta(hours=1),
     catchup=False,
     on_failure_callback = etl_log.on_DAG_error_alert,
@@ -45,10 +45,6 @@ etl_start_task = DummyOperator(
     on_retry_callback = etl_log.on_DAG_retry_alert,
     dag=dag)
 
-
-def dummy_task(*args, **kwargs):
-    print('And here we are too! Python is here:')
-    return 'Ret from Python'
 
 load_mrr_from_ebird_task = PythonOperator(
     task_id = 'load_mrr_from_ebird_task',
