@@ -3,13 +3,15 @@ import pandas as pd
 import numpy as np
 import os
 
-
+from airflow.models import Variable
 from airflow.hooks.postgres_hook import PostgresHook
 
 # Select model creation mode
-DWH_INTERNAL_MODEL = False
+var_tmp = Variable.get("EBIRD_DWH_INTERNAL_MODEL", default_var='false').lower()
+DWH_INTERNAL_MODEL = False if var_tmp == 'false' else True
 
-home_dir = '/home/iborovskii'
+home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/') # Temporary storage location
+
 
 def load_dwh_from_stg_inside(*args, **kwargs):
     # Get cursors to DBs

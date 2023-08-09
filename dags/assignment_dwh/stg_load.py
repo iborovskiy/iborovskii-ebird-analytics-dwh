@@ -3,10 +3,12 @@ import pandas as pd
 import numpy as np
 import os
 
-home_dir = '/home/iborovskii'
-
-
+from airflow.models import Variable
 from airflow.hooks.postgres_hook import PostgresHook
+
+
+home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/') # Temporary storage location
+
 
 def load_stg_dictionaries_from_mrr():
     # Get cursors to DBs
