@@ -25,7 +25,7 @@ USE_SPARK = False if var_tmp == 'false' else True
 var_tmp = Variable.get("EBIRD_DWH_INTERNAL_MODEL", default_var='false').lower()
 DWH_INTERNAL_MODEL = False if var_tmp == 'false' else True
 
-# Set params
+# Get params
 locale = Variable.get("EBIRD_LOCALE", default_var='ru') # Language for common name
 days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30') # How many days back to fetch
 regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE') # Geographic location for analysis
@@ -80,8 +80,9 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
 
     if DWH_INTERNAL_MODEL == False:
         # If property set to TRUE then use stored procedure from MRR db (loading as a single transaction)
-        print("Use external load mode of DWH")
+        print("Use external load mode of MRR")
 
+        # Clear previous dictionaries, load full new update from ebird (not incremental)
         pgs_mrr_hook.run('DELETE FROM mrr_fact_locations')
         pgs_mrr_hook.run('DELETE FROM mrr_fact_countries')
         pgs_mrr_hook.run('DELETE FROM mrr_fact_subnational')
@@ -117,7 +118,7 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
         pgs_mrr_hook.run(insert_taxonomy_sql)
     else:
         # Use stored procedure from MRR db (loading as a single transaction)
-        print("Use internal load mode of DWH")
+        print("Use internal load mode of MRR")
         pgs_mrr_hook.run(f"CALL mrr_process_dictionaries({home_dir}, 'locations.csv', 'countries.csv', 'subregions.csv', 'taxonomy.csv')")
 
     # Remove temporary csv files
@@ -142,15 +143,9 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     print('Extracted obeservations from ebird source - ', len(df), 'rows.')
 
     # Load current high_water_mark
-    pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    tmp_water_mark = pgs_dwh_hook.get_records("SELECT current_high_ts FROM high_water_mark WHERE table_id = 'mrr_fact_recent_observation'")
-    if len(tmp_water_mark) < 1 or not tmp_water_mark[0][0]:
-        high_water_mark = '2020-01-21 16:35'
-        pgs_dwh_hook.run("INSERT INTO high_water_mark VALUES(%s, %s) ON CONFLICT (table_id) DO UPDATE \
-                            SET current_high_ts = EXCLUDED.current_high_ts", parameters = ('mrr_fact_recent_observation', high_water_mark))
-    else:
-        high_water_mark = tmp_water_mark[0][0]
-    print(f"mrr_fact_recent_observation high_water_mark = {high_water_mark}")
+    high_water_mark = etl_log.load_high_water_mark()
+    print(f"high_water_mark = {high_water_mark}")
+
 
     if USE_SPARK:
         # Use Spark to transform source dataset
@@ -224,13 +219,8 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     # Make log record on success
     etl_log.log_msg(datetime.datetime.now(), etl_log.INFO_MSG, f"{len(new_rows)} new observation rows ingested from e-bird source, DAG run at {kwargs['ts']}.")
 
-    # Save current high_water_mark
-    tmp_water_mark = pgs_mrr_hook.get_records("SELECT MAX(obsdt) FROM mrr_fact_recent_observation")
-    pgs_dwh_hook.run("UPDATE high_water_mark SET current_high_ts = %s WHERE table_id = 'mrr_fact_recent_observation'", parameters = (tmp_water_mark[0][0],))
-
     # Close the connection to MRR db
     pgs_mrr_hook.conn.close()
-    pgs_dwh_hook.conn.close()
 
 
 def load_mrr_from_ebird(*args, **kwargs):
