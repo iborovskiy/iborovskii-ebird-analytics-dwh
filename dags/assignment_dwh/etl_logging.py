@@ -1,34 +1,19 @@
-# The DAG main imports
-from airflow import DAG
-# Access connectors
-from airflow.hooks.postgres_hook import PostgresHook
-
-# Utilities
+# General libraries imports
 import datetime
+
+# DAG imports
+# DAG main imports
+from airflow import DAG
+# DAG access connectors imports
+from airflow.hooks.postgres_hook import PostgresHook
 
 
 # Load current high_water_mark
 def load_high_water_mark():
     pgs_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    tmp_water_mark = pgs_hook.get_records("SELECT get_high_water_mark('dwh_fact_observation')")
-    if len(tmp_water_mark) < 1 or not tmp_water_mark[0][0]:
-        high_water_mark = '2020-01-21 16:35'
-        pgs_hook.run("INSERT INTO high_water_mark VALUES(%s, %s) ON CONFLICT (table_id) DO UPDATE \
-                            SET current_high_ts = EXCLUDED.current_high_ts", parameters = ('dwh_fact_observation', high_water_mark))
-
-    else:
-        high_water_mark = tmp_water_mark[0][0]
-    
-    return high_water_mark
-
-
-# Update current high_water_mark
-def update_high_water_mark():
-    pgs_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    tmp_water_mark = pgs_hook.get_records("SELECT MAX(obsdt) FROM dwh_fact_observation")
-    pgs_hook.run("UPDATE high_water_mark SET current_high_ts = %s WHERE table_id = 'dwh_fact_observation'",
-                     parameters = (tmp_water_mark[0][0],))
+    high_water_mark = (pgs_hook.get_records("SELECT get_current_HWM('dwh_fact_observation')"))[0][0]
     pgs_hook.conn.close()
+    return high_water_mark
 
 
 # Message types
@@ -39,7 +24,7 @@ ERROR_MSG = 3
 # Helper function for saving message into operational log
 def log_msg(ts, level, msg):
     pgs_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    log_insert = 'insert into etl_log (ts, event_type, event_description) values (%s, %s, %s)'
+    log_insert = 'INSERT INTO etl_log (ts, event_type, event_description) VALUES (%s, %s, %s)'
     pgs_hook.run(log_insert, parameters = (ts, level, msg))
     pgs_hook.conn.close()
 
@@ -65,7 +50,4 @@ def on_DAG_error_alert(context):
 def on_DAG_retry_alert(context):
     log_msg(datetime.datetime.now(), ERROR_MSG, f"Daily DAG encountered a problem and task is up to retry, \
             task_instance_key_str={context['task_instance_key_str']}, DAG run at {context['ts']}.")
-
-
-
 

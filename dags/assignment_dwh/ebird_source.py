@@ -1,38 +1,39 @@
-# Import libraries
+# General libraries imports
 import pandas as pd
 import numpy as np
+import datetime
+import os
+
+# Spark imports
 import findspark
 from pyspark import SparkContext, SparkConf
 from pyspark.sql import SparkSession
 
+# External API imports
+import requests
+
+# DAG imports
+# DAG access connectors imports
 from airflow.hooks.postgres_hook import PostgresHook
+# DAG utils imports
 from airflow.models import Variable
 
-import requests
-import datetime
-import os
-
+# Local modules imports
 import assignment_dwh.etl_logging as etl_log
 
-# API Key
-api_key = Variable.get("EBIRD_API_KEY", default_var=None)
-
-# Select work mode - Spark / Local pandas df
+# Initialize configuration parameters
+api_key = Variable.get("EBIRD_API_KEY", default_var=None)           # API Key
 var_tmp = Variable.get("EBIRD_USE_SPARK", default_var='false').lower()
-USE_SPARK = False if var_tmp == 'false' else True
-
-# Select model creation mode
+USE_SPARK = False if var_tmp == 'false' else True                   # Work mode - Spark / Local pandas df
 var_tmp = Variable.get("EBIRD_DWH_INTERNAL_MODEL", default_var='false').lower()
-DWH_INTERNAL_MODEL = False if var_tmp == 'false' else True
-
-# Get params
-locale = Variable.get("EBIRD_LOCALE", default_var='ru') # Language for common name
-days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30') # How many days back to fetch
-regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE') # Geographic location for analysis
-home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/') # Temporary storage location
+DWH_INTERNAL_MODEL = False if var_tmp == 'false' else True          # Model creation mode
+locale = Variable.get("EBIRD_LOCALE", default_var='ru')             # Language for common name
+days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30')       # How many days back to fetch
+regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE')    # Geographic location for analysis
+home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')      # Temporary storage location
 
 
-# Requests
+# Requests strings
 url = f'https://api.ebird.org/v2/data/obs/{regionCode}/recent?sppLocale={locale}&back={days_back}'
 url_locs = f'https://api.ebird.org/v2/ref/hotspot/{regionCode}?back={days_back}&fmt=json'
 url_countries = f'https://api.ebird.org/v2/ref/region/list/country/world'
@@ -119,7 +120,7 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
     else:
         # Use stored procedure from MRR db (loading as a single transaction)
         print("Use internal load mode of MRR")
-        pgs_mrr_hook.run(f"CALL mrr_process_dictionaries({home_dir}, 'locations.csv', 'countries.csv', 'subregions.csv', 'taxonomy.csv')")
+        pgs_mrr_hook.run(f"CALL mrr_process_dictionaries('{home_dir}', 'locations.csv', 'countries.csv', 'subregions.csv', 'taxonomy.csv')")
 
     # Remove temporary csv files
     os.remove(home_dir + '/locations.csv')
@@ -211,7 +212,7 @@ def ingest_new_rows_from_csv(*args, **kwargs):
 
     else:
         # Use stored procedure from MRR db (loading as a single transaction)
-        pgs_mrr_hook.run(f"CALL mrr_process_new_observations({home_dir}, 'observations.csv')")
+        pgs_mrr_hook.run(f"CALL mrr_process_new_observations('{home_dir}', 'observations.csv')")
 
     # Remove temporary csv files
     os.remove(home_dir + '/observations.csv')

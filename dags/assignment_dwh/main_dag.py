@@ -1,18 +1,19 @@
-# Import support libraries
+# General libraries imports
 from datetime import timedelta
 
-# The DAG main imports
+# DAG imports
+# DAG main imports
 from airflow import DAG
-# Access connectors
+# DAG access connectors imports
 from airflow.hooks.postgres_hook import PostgresHook
-# Operators
+# DAG operators imports
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.operators.bash_operator import BashOperator
 from airflow.operators.python_operator import PythonOperator
-# DAG support imports
+# DAG utils imports
 from airflow.utils.dates import days_ago
 
-# Import local modules
+# Local modules imports
 import assignment_dwh.etl_logging as etl_log
 import assignment_dwh.ebird_source as ebird
 import assignment_dwh.stg_load as stg

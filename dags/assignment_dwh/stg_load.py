@@ -1,20 +1,22 @@
-# Import libraries
+# General libraries imports
 import pandas as pd
 import numpy as np
 import os
 
-from airflow.models import Variable
+# DAG imports
+# DAG access connectors imports
 from airflow.hooks.postgres_hook import PostgresHook
+# DAG utils imports
+from airflow.models import Variable
 
+# Local modules imports
 import assignment_dwh.etl_logging as etl_log
 
-# Select model creation mode
+# Initialize configuration parameters
 var_tmp = Variable.get("EBIRD_DWH_INTERNAL_MODEL", default_var='false').lower()
-DWH_INTERNAL_MODEL = False if var_tmp == 'false' else True
-
-# Get params
-locale = Variable.get("EBIRD_LOCALE", default_var='ru') # Language for common name
-home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/') # Temporary storage location
+DWH_INTERNAL_MODEL = False if var_tmp == 'false' else True      # Model creation mode
+locale = Variable.get("EBIRD_LOCALE", default_var='ru')         # Language for common name
+home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')  # Temporary workig directory
 
 
 def load_stg_dictionaries_from_mrr():
@@ -91,7 +93,7 @@ def load_stg_dictionaries_from_mrr():
     else:
         # Use stored procedure from STG db (loading as a single transaction)
         print("Use internal load mode of STG")
-        pgs_stg_hook.run(f"CALL stg_process_dictionaries({home_dir}, 'locations_stg.csv', 'taxonomy_stg.csv', {locale})")
+        pgs_stg_hook.run(f"CALL stg_process_dictionaries('{home_dir}', 'locations_stg.csv', 'taxonomy_stg.csv', '{locale}')")
 
     # Remove temporary csv files
     os.remove(home_dir + '/locations_stg.csv')
@@ -142,7 +144,7 @@ def load_stg_from_mrr(*args, **kwargs):
     else:
         # Use stored procedure from STG db (loading as a single transaction)
         print("Use internal load mode of STG")
-        pgs_stg_hook.run(f"CALL stg_process_observations({home_dir}, 'observations_stg.csv')")
+        pgs_stg_hook.run(f"CALL stg_process_observations('{home_dir}', 'observations_stg.csv')")
     
     print('Stored to STG - ', len(mrr_new_frame), 'rows.')
 
