@@ -1,10 +1,14 @@
 #!/bin/sh
 
-if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ]
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ] || [ -z "$8" ] || [ -z "$9" ]
 then
-	echo "USAGE: ebird-airflow-setup.sh <host> <port> <username> <password> <api_key> <backup_dir>"
+	echo "USAGE: ebird-airflow-setup.sh <host> <port> <username> <password> <api_key> <backup_dir> <working_dir> <region> <names_locale>"
 else
 
+	echo "Install dependencies..."
+	pip install pandas findspark pyspark requests apache-airflow-providers-postgres
+
+	echo
 	echo "Airflow connection setup..."
 	echo
 
@@ -48,15 +52,15 @@ else
 	echo "EBIRD_DWH_INTERNAL_MODEL created."
 	airflow variables set EBIRD_USE_SPARK False
 	echo "EBIRD_USE_SPARK created."
-	airflow variables set EBIRD_REGION_CODE GE
+	airflow variables set EBIRD_REGION_CODE $8 # e.g. GE
 	echo "EBIRD_REGION_CODE created."
-	airflow variables set EBIRD_LOCALE ru
+	airflow variables set EBIRD_LOCALE $9 # e.g. ru
 	echo "EBIRD_LOCALE created."
 	airflow variables set EBIRD_DAYS_BACK 30
 	echo "EBIRD_DAYS_BACK created."
 	airflow variables set EBIRD_API_KEY $5
 	echo "EBIRD_API_KEY created."
-	airflow variables set EBIRD_HOME_DIR /home/iborovskii
+	airflow variables set EBIRD_HOME_DIR $7 # e.g. /home/iborovskii
 	echo "EBIRD_HOME_DIR created."
 	echo
 	echo "Airflow variables configured."

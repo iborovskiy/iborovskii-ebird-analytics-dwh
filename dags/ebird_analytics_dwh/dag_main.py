@@ -14,10 +14,10 @@ from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 
 # Local modules imports
-import assignment_dwh.etl_logging as etl_log
-import assignment_dwh.ebird_source as ebird
-import assignment_dwh.stg_load as stg
-import assignment_dwh.dwh_load as dwh
+import ebird_analytics_dwh.etl_logging as etl_log
+import ebird_analytics_dwh.mrr_process as mrr
+import ebird_analytics_dwh.stg_process as stg
+import ebird_analytics_dwh.dwh_process as dwh
 
 # define DAG
 default_args = {
@@ -50,7 +50,7 @@ etl_start_task = DummyOperator(
 load_mrr_from_ebird_task = PythonOperator(
     task_id = 'load_mrr_from_ebird_task',
     provide_context=True,
-    python_callable = ebird.load_mrr_from_ebird,
+    python_callable = mrr.load_mrr_from_ebird,
     dag = dag,
     on_success_callback = etl_log.on_DAG_mrr_loaded_alert,
     on_retry_callback = etl_log.on_DAG_retry_alert,
