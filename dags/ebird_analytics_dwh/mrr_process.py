@@ -24,11 +24,20 @@ import ebird_analytics_dwh.configs as sq
 
 
 def load_mrr_dictionaries_from_ebird(*args, **kwargs):
+    # Get DAG variables values
+    locale = Variable.get("EBIRD_LOCALE", default_var='ru')                 # Language for common name
+    days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30')           # How many days back to fetch
+    regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE')        # Geographic location for analysis
+    DWH_INTERNAL_MODEL = False if Variable.get("EBIRD_DWH_INTERNAL_MODEL", 
+            default_var='false').lower() == 'false' else True               # Model creation mode
+    api_key = Variable.get("EBIRD_API_KEY", default_var=None)               # API Key
+    home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')          # Temporary working directory
+
     # Make request
-    r_loc = requests.get(sq.url_locs, headers = {'X-eBirdApiToken' : sq.api_key})
-    r_countries = requests.get(sq.url_countries, headers = {'X-eBirdApiToken' : sq.api_key})
-    r_subregions = requests.get(sq.url_sub_regions, headers = {'X-eBirdApiToken' : sq.api_key})
-    r_taxonomy = requests.get(sq.url_taxonomy, headers = {'X-eBirdApiToken' : sq.api_key})
+    r_loc = requests.get(sq.url_locs.format(regionCode, days_back), headers = {'X-eBirdApiToken' : api_key})
+    r_countries = requests.get(sq.url_countries, headers = {'X-eBirdApiToken' : api_key})
+    r_subregions = requests.get(sq.url_sub_regions.format(regionCode), headers = {'X-eBirdApiToken' : api_key})
+    r_taxonomy = requests.get(sq.url_taxonomy.format(locale), headers = {'X-eBirdApiToken' : api_key})
     
     if r_taxonomy.status_code != 200 or r_loc.status_code != 200 or r_countries.status_code != 200 \
         or r_subregions.status_code != 200:
@@ -47,43 +56,55 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
     # Exporting loaded dictionaries into csv
     df_loc['latestObsDt'] = pd.to_datetime(df_loc['latestObsDt'])
     new_rows = df_loc[['locId', 'locName', 'countryCode', 'subnational1Code', 'lat', 'lng', 'latestObsDt', 'numSpeciesAllTime']]
-    new_rows.to_csv(sq.home_dir + '/locations.csv', index = False)
+    new_rows.to_csv(home_dir + '/locations.csv', index = False)
 
     new_rows = df_countries[['code', 'name']]
-    new_rows.to_csv(sq.home_dir + '/countries.csv', index = False)
+    new_rows.to_csv(home_dir + '/countries.csv', index = False)
 
     new_rows = df_subregions[['code', 'name']]
-    new_rows.to_csv(sq.home_dir + '/subregions.csv', index = False)
+    new_rows.to_csv(home_dir + '/subregions.csv', index = False)
 
     new_rows = df_taxonomy[['speciesCode', 'sciName', 'comName', 'category', 'order', 'familyCode', 'familySciName']]
-    new_rows.to_csv(sq.home_dir + '/taxonomy.csv', index = False)
+    new_rows.to_csv(home_dir + '/taxonomy.csv', index = False)
 
     # Loading dictionaries in MRR database
     pgs_mrr_hook = PostgresHook(postgres_conn_id="postgres_mrr_conn")
 
-    if sq.DWH_INTERNAL_MODEL == False:
+    if DWH_INTERNAL_MODEL == False:
         # Use several SQL queries in single transaction
         print("Use external load mode of MRR")
-        sql_q = sq.ingest_dict_sql
+        sql_q = sq.ingest_dict_sql.format(home_dir)
     else:
         # Use stored procedure from MRR db (single transaction)
         print("Use internal load mode of MRR")
-        sql_q = sq.ingest_dict_proc
+        sql_q = sq.ingest_dict_proc.format(home_dir)
     pgs_mrr_hook.run(sql_q)
 
     # Remove temporary csv files
-    os.remove(sq.home_dir + '/locations.csv')
-    os.remove(sq.home_dir + '/countries.csv')
-    os.remove(sq.home_dir + '/subregions.csv')
-    os.remove(sq.home_dir + '/taxonomy.csv')
+    os.remove(home_dir + '/locations.csv')
+    os.remove(home_dir + '/countries.csv')
+    os.remove(home_dir + '/subregions.csv')
+    os.remove(home_dir + '/taxonomy.csv')
 
     # Close the connection to MRR db
     pgs_mrr_hook.conn.close()
 
 
 def ingest_new_rows_from_csv(*args, **kwargs):
+    # Get DAG variables values
+    locale = Variable.get("EBIRD_LOCALE", default_var='ru')                     # Language for common name
+    regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE')            # Geographic location for analysis
+    days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30')               # How many days back to fetch
+    USE_SPARK = False if Variable.get("EBIRD_USE_SPARK",
+                default_var='false').lower() == 'false' else True               # Work mode - Spark / Local pandas df
+    DWH_INTERNAL_MODEL = False if Variable.get("EBIRD_DWH_INTERNAL_MODEL", 
+                default_var='false').lower() == 'false' else True               # Model creation mode
+    api_key = Variable.get("EBIRD_API_KEY", default_var=None)                   # API Key
+    meteostat_api_key = Variable.get("EBIRD_WEATHER_API_KEY", default_var=None) # Weather API Key
+    home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')              # Temporary working directory
+
     # Make request
-    r = requests.get(sq.url, headers = {'X-eBirdApiToken' : sq.api_key})
+    r = requests.get(sq.url.format(regionCode, locale, days_back), headers = {'X-eBirdApiToken' : api_key})
     # Check status
     if r.status_code != 200:
         raise ValueError('Bad response from e-bird')
@@ -97,7 +118,7 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     print(f"high_water_mark = {high_water_mark}")
 
 
-    if sq.USE_SPARK:
+    if USE_SPARK:
         # Use Spark to transform source dataset
 
         # Create Spark context and session
@@ -113,7 +134,7 @@ def ingest_new_rows_from_csv(*args, **kwargs):
         sdf.createTempView("tmp_ebird_recent")
         new_rows = spark.sql(sq.spark_sql_req.format(high_water_mark)).collect()
 
-        new_rows.write.csv(sq.home_dir + '/observations.csv')
+        new_rows.write.csv(home_dir + '/observations.csv')
 
     else:
         # Use pandas df to transform source dataset
@@ -128,31 +149,68 @@ def ingest_new_rows_from_csv(*args, **kwargs):
         else:
             new_rows['exoticCategory'] = None
 
-        new_rows.to_csv(sq.home_dir + '/observations.csv', index = False)
+        new_rows.to_csv(home_dir + '/observations.csv', index = False)
 
     print('Loaded observations from ebird source - ', len(new_rows), 'rows.')
 
     # Import prepared csv file into the MRR database (through temporary table)
     pgs_mrr_hook = PostgresHook(postgres_conn_id="postgres_mrr_conn")
+    
 
-    if sq.DWH_INTERNAL_MODEL == False:
+    if DWH_INTERNAL_MODEL == False:
         # Use several SQL queries in single transaction
         print("Use external load mode of MRR")
-        sql_q = sq.ingest_observations_sql
+        sql_q = sq.ingest_observations_sql.format(home_dir)
     else:
         # Use stored procedure from MRR db (single transaction)
         print("Use internal load mode of MRR")
-        sql_q = sq.ingest_observations_proc
+        sql_q = sq.ingest_observations_proc.format(home_dir)
     pgs_mrr_hook.run(sql_q)
 
-    # Remove temporary csv files
-    os.remove(sq.home_dir + '/observations.csv')
+    # Load weather conditions for all locations of new observations
+    # Update interval is set to 10 days and applied algorithm for reduction of number of API calls (for API billing purposes)
+    weather_high_water_mark = etl_log.load_high_water_mark('mrr_fact_weather_observations')
+    if datetime.datetime.now() - weather_high_water_mark > datetime.timedelta(days=10):
+        print('Time to update weather')
+        pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
+        new_weather_rows = pgs_dwh_hook.get_records(sq.get_weather_sql.format(high_water_mark))
+        cur_loc_id = None
+        loc_no_data = False
+        for row in new_weather_rows:
+            if loc_no_data and row[0] == cur_loc_id:
+                print(f'No previous date for {cur_loc_id=}, skip all subsequent requests.')
+                continue
+            loc_no_data = False
+            # Make a request to the Meteostat JSON API
+            r = requests.get(sq.url_get_weather.format(row[1], row[2], row[3], row[3]), headers = {'x-rapidapi-key' : meteostat_api_key})
+            if r.status_code != 200:
+                print(f"Can't fetch weather data for station_id - {row[0]}, {row[1], row[2]}. Status - {r.status_code}")
+                continue
+            df = pd.DataFrame(r.json()['data'])
+            print(f'Fetched rows - {len(df)}')
+            if len(df) == 1 and not np.isnan(df.loc[0, 'tavg']):
+                print(f'Loaded data for loc_id - {row[0]}, {row[1]}, {row[2]}, date - {row[3]}')
+                pgs_mrr_hook.run(sq.insert_weather_observations_sql,
+                             parameters = (row[0], df.loc[0, 'date'], df.loc[0, 'tavg'], df.loc[0, 'tmin'], df.loc[0, 'tmax'],
+                                 df.loc[0, 'prcp'], df.loc[0, 'snow'], df.loc[0, 'wdir'], df.loc[0, 'wspd'],
+                                 df.loc[0, 'wpgt'], df.loc[0, 'pres'], df.loc[0, 'tsun']))
+            else:
+                print(f'No data for loc_id - {row[0]}, {row[1]}, {row[2]}, date - {row[3]}. Set flag to skip all subsequent dates!')
+                cur_loc_id = row[0]
+                loc_no_data = True
+        print(f'{len(new_weather_rows)} rows added to weather conditions.')
+        pgs_dwh_hook.conn.close()
+    else:
+        print(f'Skip weather update. {weather_high_water_mark=}, Current time - {datetime.datetime.now()}.')
 
-    # Make log record on success
-    etl_log.log_msg(datetime.datetime.now(), etl_log.INFO_MSG, f"{len(new_rows)} new observation rows ingested from e-bird source, DAG run at {kwargs['ts']}.")
+    # Remove temporary csv files
+    os.remove(home_dir + '/observations.csv')
 
     # Close the connection to MRR db
     pgs_mrr_hook.conn.close()
+
+    # Make log record on success
+    etl_log.log_msg(datetime.datetime.now(), etl_log.INFO_MSG, f"{len(new_rows)} new observation rows ingested from e-bird source, DAG run at {kwargs['ts']}.")
 
 
 def load_mrr_from_ebird(*args, **kwargs):

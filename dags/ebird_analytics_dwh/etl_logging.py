@@ -9,9 +9,9 @@ from airflow.hooks.postgres_hook import PostgresHook
 
 
 # Load current high_water_mark
-def load_high_water_mark():
+def load_high_water_mark(tbl = 'dwh_fact_observation'):
     pgs_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    high_water_mark = (pgs_hook.get_records("SELECT get_current_HWM('dwh_fact_observation')"))[0][0]
+    high_water_mark = (pgs_hook.get_records(f"SELECT get_current_HWM('{tbl}')"))[0][0]
     pgs_hook.conn.close()
     return high_water_mark
 
