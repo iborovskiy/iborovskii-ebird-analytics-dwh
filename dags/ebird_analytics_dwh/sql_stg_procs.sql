@@ -17,8 +17,8 @@ DECLARE
 BEGIN
 
 	-- clear STG dictionaries tables from old data
-	DELETE FROM stg_fact_locations;
-	DELETE FROM stg_fact_taxonomy;
+	TRUNCATE TABLE stg_fact_locations;
+	TRUNCATE TABLE stg_fact_taxonomy;
 	
 	-- import new data from csv files into dictionaries tables
 	EXECUTE format
@@ -67,7 +67,8 @@ $BODY$;
 
 CREATE OR REPLACE PROCEDURE public.stg_process_observations(
 	IN path_to_csv character varying,
-	IN obs_filename character varying)
+	IN obs_filename character varying,
+	IN weather_filename character varying)
 LANGUAGE 'plpgsql'
 AS $BODY$
 DECLARE
@@ -75,7 +76,8 @@ DECLARE
 BEGIN
 
 	-- clear STG observation table from old data
-	DELETE FROM stg_fact_observation;
+	TRUNCATE TABLE stg_fact_observation;
+	TRUNCATE TABLE stg_fact_weather_observations;
 	
 	-- import new data from csv files into staging area
 	EXECUTE format
@@ -86,6 +88,16 @@ BEGIN
 			DELIMITER ','
 			CSV HEADER
 		$str$, path_to_csv || '/' || obs_filename
+	);
+
+	EXECUTE format
+	(
+		$str$
+			COPY stg_fact_weather_observations
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || weather_filename
 	);
 
 END;

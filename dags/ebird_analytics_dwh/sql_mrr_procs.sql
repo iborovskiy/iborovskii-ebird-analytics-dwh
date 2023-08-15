@@ -17,10 +17,10 @@ DECLARE
 -- declare variables here
 BEGIN
 	-- delete old dictionaries tables
-	DELETE FROM mrr_fact_locations;
-	DELETE FROM mrr_fact_countries;
-	DELETE FROM mrr_fact_subnational;
-	DELETE FROM mrr_fact_taxonomy;
+	TRUNCATE TABLE mrr_fact_locations;
+	TRUNCATE TABLE mrr_fact_countries;
+	TRUNCATE TABLE mrr_fact_subnational;
+	TRUNCATE TABLE mrr_fact_taxonomy;
 	
 	-- import new data from csv files
 	EXECUTE format

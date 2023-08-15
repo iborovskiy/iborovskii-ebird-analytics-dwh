@@ -5,11 +5,14 @@
 
 -- DROP PROCEDURE IF EXISTS public.dwh_process_observations(character varying, character varying, character varying, character varying);
 
+-- DROP PROCEDURE IF EXISTS public.dwh_process_observations(character varying, character varying, character varying, character varying, character varying);
+
 CREATE OR REPLACE PROCEDURE public.dwh_process_observations(
 	IN path_to_csv character varying,
 	IN obs_filename character varying,
 	IN loc_filename character varying,
-	IN taxonomy_filename character varying)
+	IN taxonomy_filename character varying,
+	IN weather_filename character varying)
 LANGUAGE 'plpgsql'
 AS $BODY$
 DECLARE
@@ -28,8 +31,19 @@ BEGIN
 		$str$, path_to_csv || '/' || obs_filename
 	);
 	
+	-- import new weather observations into temporary table
+	EXECUTE format
+	(
+		$str$
+			COPY dwg_fact_weather_observations_tmp
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || weather_filename
+	);
+	
 	-- import new taxonomy dictionary into DWH
-	DELETE FROM dwh_dim_species_details;
+	TRUNCATE TABLE dwh_dim_species_details;
 	
 	EXECUTE format
 	(
@@ -42,7 +56,7 @@ BEGIN
 	);
 	
 	-- import new public locations dictionary into DWH
-	DELETE FROM dwh_dim_location_details;
+	TRUNCATE TABLE dwh_dim_location_details;
 
 	EXECUTE format
 	(
@@ -55,20 +69,28 @@ BEGIN
 	);
 
 	-- create new data model for DWH
-	
+
 	-- create dimension table - dwh_dim_dt (incremental update)
 	INSERT INTO dwh_dim_dt
     SELECT DISTINCT obsdt, extract(day from obsdt), extract(month from obsdt),
                     TO_CHAR(obsdt, 'Month'), extract(year from obsdt), extract(quarter from obsdt)
     FROM dwh_fact_raw_observations_tmp
     ON CONFLICT (obsdt) DO NOTHING;
-	
+
 	-- create fact table - dwh_fact_observation (incremental update)
-	INSERT INTO dwh_fact_observation
-    SELECT subid, speciescode, locid, obsdt, howmany
-    FROM dwh_fact_raw_observations_tmp
+    INSERT INTO dwh_fact_observation
+    SELECT o.subid, o.speciescode, o.locid, o.obsdt, o.howmany
+    FROM dwh_fact_raw_observations_tmp o
     ON CONFLICT DO NOTHING;
 	
+	-- update weather conditions for observations
+    UPDATE dwh_fact_observation o
+    SET tavg = w.tavg, tmin = w.tmin, tmax = w.tmax, prcp = w.prcp,
+        snow = w.snow, wdir = w.wdir, wspd = w.wspd, wpgt = w.wpgt, 
+        pres = w.pres, tsun = w.tsun
+    FROM dwg_fact_weather_observations_tmp w
+    WHERE o.locid = w.loc_id AND CAST(o.obsdt AS DATE) = w.obsdt;
+
 	-- create dimension table - dwh_dim_location (incremental update)
 	INSERT INTO dwh_dim_location
     SELECT DISTINCT o.locid, o.locname, o.lat, o.lon, l.countryname,
@@ -82,7 +104,7 @@ BEGIN
         latestObsDt = EXCLUDED.latestObsDt, numSpeciesAllTime = EXCLUDED.numSpeciesAllTime;
 		
 	-- create dimension table - dwh_dim_species (full update not incremental)
-	DELETE FROM dwh_dim_species;
+	TRUNCATE TABLE dwh_dim_species;
 	
 	INSERT INTO dwh_dim_species
     SELECT DISTINCT o.speciescode, d.sciName, d.comName, d.category, d.orderSciName, d.orderComName,
@@ -91,14 +113,20 @@ BEGIN
     LEFT JOIN dwh_dim_species_details d
     ON o.speciescode = d.speciescode;
 	
-	-- truncate temporary observation table
-	DELETE FROM dwh_fact_raw_observations_tmp;
-	
 	-- update current high_water_mark on success of current DAG
 	UPDATE high_water_mark
 	SET current_high_ts = (SELECT MAX(obsdt) FROM dwh_fact_observation)
 	WHERE table_id = 'dwh_fact_observation';
-	
+
+	UPDATE high_water_mark
+	SET current_high_ts = (SELECT MAX(update_ts) FROM dwg_fact_weather_observations_tmp)
+	WHERE table_id = 'mrr_fact_weather_observations' AND
+		(SELECT MAX(update_ts) FROM dwg_fact_weather_observations_tmp) IS NOT NULL;
+
+	-- truncate temporary observation table
+	TRUNCATE TABLE dwh_fact_raw_observations_tmp;
+	TRUNCATE TABLE dwg_fact_weather_observations_tmp;
+		
 END;
 $BODY$;
 

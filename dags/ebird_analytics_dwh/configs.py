@@ -2,24 +2,15 @@
 # DAG utils imports
 from airflow.models import Variable
 
-# Initialize configuration parameters
-locale = Variable.get("EBIRD_LOCALE", default_var='ru')                 # Language for common name
-days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30')           # How many days back to fetch
-regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE')        # Geographic location for analysis
-home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')          # Temporary working directory
-USE_SPARK = False if Variable.get("EBIRD_USE_SPARK",
-            default_var='false').lower() == 'false' else True           # Work mode - Spark / Local pandas df
-DWH_INTERNAL_MODEL = False if Variable.get("EBIRD_DWH_INTERNAL_MODEL", 
-            default_var='false').lower() == 'false' else True           # Model creation mode
-api_key = Variable.get("EBIRD_API_KEY", default_var=None)               # API Key
-
 
 # API Requests strings
-url = f'https://api.ebird.org/v2/data/obs/{regionCode}/recent?sppLocale={locale}&back={days_back}'
-url_locs = f'https://api.ebird.org/v2/ref/hotspot/{regionCode}?back={days_back}&fmt=json'
-url_countries = f'https://api.ebird.org/v2/ref/region/list/country/world'
-url_sub_regions = f'https://api.ebird.org/v2/ref/region/list/subnational1/{regionCode}'
-url_taxonomy = f'https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&locale={locale}'
+url = 'https://api.ebird.org/v2/data/obs/{}/recent?sppLocale={}&back={}'
+url_locs = 'https://api.ebird.org/v2/ref/hotspot/{}?back={}&fmt=json'
+url_countries = 'https://api.ebird.org/v2/ref/region/list/country/world'
+url_sub_regions = 'https://api.ebird.org/v2/ref/region/list/subnational1/{}'
+url_taxonomy = 'https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&locale={}'
+url_get_station = 'https://meteostat.p.rapidapi.com/stations/nearby?lat={}&lon={}&limit=1&radius=100000'
+url_get_weather = 'https://meteostat.p.rapidapi.com/point/daily?lat={}&lon={}&start={}&end={}&model=false'
 
 
 # -------------------------------------------
@@ -27,38 +18,38 @@ url_taxonomy = f'https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&locale={lo
 # -------------------------------------------
 # Clear previous dictionaries, load full new dictionaries from ebird (not incremental)
 # As sequence of SQL queries in single transaction
-ingest_dict_sql = f"""
+ingest_dict_sql ="""
     BEGIN;
 
     TRUNCATE TABLE mrr_fact_locations;
     TRUNCATE TABLE mrr_fact_countries;
-    RUNCATE TABLE mrr_fact_subnational;
+    TRUNCATE TABLE mrr_fact_subnational;
     TRUNCATE TABLE mrr_fact_taxonomy;
 
     COPY mrr_fact_locations(locid, locname, countrycode, subnational1Code, lat, lon, latestObsDt, numSpeciesAllTime)
-    FROM '{home_dir}/locations.csv'
+    FROM '{0}/locations.csv'
     DELIMITER ','
     CSV HEADER;
 
     COPY mrr_fact_countries(countrycode, countryname)
-    FROM '{home_dir}/countries.csv'
+    FROM '{0}/countries.csv'
     DELIMITER ','
     CSV HEADER;
 
     COPY mrr_fact_subnational(subnationalCode, subnationalName)
-    FROM '{home_dir}/subregions.csv'
+    FROM '{0}/subregions.csv'
     DELIMITER ','
     CSV HEADER;
 
     COPY mrr_fact_taxonomy(speciesCode, sciName, comName, category, orderSciName, familyCode, familySciName)
-    FROM '{home_dir}/taxonomy.csv'
+    FROM '{0}/taxonomy.csv'
     DELIMITER ','
     CSV HEADER;
 
     COMMIT;
 """
 # As stored procedure (single transaction)
-ingest_dict_proc = f"CALL mrr_process_dictionaries('{home_dir}', 'locations.csv', 'countries.csv', 'subregions.csv', 'taxonomy.csv')"
+ingest_dict_proc = "CALL mrr_process_dictionaries('{0}', 'locations.csv', 'countries.csv', 'subregions.csv', 'taxonomy.csv')"
 
 # Spark SQL ingestion query
 spark_sql_req = """
@@ -70,12 +61,12 @@ spark_sql_req = """
 
 # Import prepared csv file into the MRR database (through temporary table)
 # As sequence of SQL queries in single transaction
-ingest_observations_sql = f"""
+ingest_observations_sql = """
     BEGIN;
 
     COPY mrr_fact_recent_observation_tmp(speciescode, sciname, locid, locname, obsdt, howmany, lat, lon,
         obsvalid, obsreviewed, locationprivate, subid, comname, exoticcategory)
-    FROM '{home_dir}/observations.csv'
+    FROM '{0}/observations.csv'
     DELIMITER ','
     CSV HEADER;
 
@@ -89,14 +80,30 @@ ingest_observations_sql = f"""
     COMMIT;
 """
 # As stored procedure (single transaction)
-ingest_observations_proc = f"CALL mrr_process_new_observations('{home_dir}', 'observations.csv')"
+ingest_observations_proc = "CALL mrr_process_new_observations('{0}', 'observations.csv')"
 
+# Load weather conditions for all locations of new observations
+get_weather_sql = """
+    SELECT DISTINCT o.locid, l.lat, l.lon, CAST(o.obsdt AS DATE) obsdt
+    FROM dwh_fact_observation o
+    JOIN dwh_dim_location l
+    ON o.locid = l.locid
+    WHERE o.tavg IS NULL
+    ORDER BY o.locid, CAST(o.obsdt AS DATE)
+"""
+
+# Insert new record in mrr_fact_weather_observations table
+insert_weather_observations_sql = """
+    INSERT INTO mrr_fact_weather_observations 
+    VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+    ON CONFLICT DO NOTHING
+"""
 
 # -------------------------------------------
 # Queries for STG DB
 # -------------------------------------------
 # Export actual MRR public locations dictionary to CSV files
-mrr_dict_locations_to_csv_sql = f"""
+mrr_dict_locations_to_csv_sql = """
     SELECT l.locid locid, l.locname locname, c.countryname countryname, s.subnationalname subregionname, 
             l.lat lat, l.lon lon, l.latestobsdt latestobsdt, l.numspeciesalltime numspeciesalltime
     FROM mrr_fact_locations l
@@ -106,7 +113,7 @@ mrr_dict_locations_to_csv_sql = f"""
     ON l.subnational1code = s.subnationalcode
 """
 # Export actual MRR taxonomy dictionary to CSV files
-mrr_dict_taxonomy_to_csv_sql = f"""
+mrr_dict_taxonomy_to_csv_sql = """
     SELECT t.speciesCode speciesCode, t.sciName sciName, t.comName comName, t.category category,
             t.orderSciName orderSciName, NULL AS orderComName, t.familyCode familyCode, NULL AS familyComName,
             t.familySciName familySciName
@@ -118,19 +125,19 @@ mrr_dict_taxonomy_to_csv_sql = f"""
 # - Load full new update from exported CSV (not incremental) 
 # - and add common names of birds for selected locale
 # As sequence of SQL queries in single transaction
-import_dict_from_csv_to_stg_sql = f"""
+import_dict_from_csv_to_stg_sql = """
     BEGIN;
 
     TRUNCATE TABLE stg_fact_locations;
     TRUNCATE TABLE stg_fact_taxonomy;
         
     COPY stg_fact_locations
-    FROM '{home_dir}/locations_stg.csv'
+    FROM '{0}/locations_stg.csv'
     DELIMITER ','
     CSV HEADER;
 
     COPY stg_fact_taxonomy
-    FROM '{home_dir}/taxonomy_stg.csv'
+    FROM '{0}/taxonomy_stg.csv'
     DELIMITER ','
     CSV HEADER;
 
@@ -139,15 +146,15 @@ import_dict_from_csv_to_stg_sql = f"""
         familyComName = stg_fact_family_comnames.familyComName
     FROM stg_fact_order_comnames, stg_fact_family_comnames
     WHERE stg_fact_taxonomy.orderSciName = stg_fact_order_comnames.orderSciName
-            AND stg_fact_order_comnames.orderLocale = '{locale}'
+            AND stg_fact_order_comnames.orderLocale = '{1}'
             AND stg_fact_taxonomy.familyCode = stg_fact_family_comnames.familyCode
-            AND stg_fact_family_comnames.familyLocale = '{locale}';
-                    
+            AND stg_fact_family_comnames.familyLocale = '{1}';
+
     COMMIT;
 """
 # As stored procedure (single transaction)
-import_dict_from_csv_to_stg_proc = f"""
-    CALL stg_process_dictionaries('{home_dir}', 'locations_stg.csv', 'taxonomy_stg.csv', '{locale}')
+import_dict_from_csv_to_stg_proc = """
+    CALL stg_process_dictionaries('{0}', 'locations_stg.csv', 'taxonomy_stg.csv', '{1}')
 """
 
 # Export trusted new data rows for observations from MRR db to CSV files (incremental using high water mark)
@@ -156,26 +163,38 @@ mrr_observations_to_csv_sql = """
     FROM mrr_fact_recent_observation
     WHERE obsValid = TRUE and obsdt > '{}'
 """
+# Export new weather observation for updated locations (incremental using high water mark)
+mrr_weather_to_csv_sql = """
+    SELECT *
+    FROM mrr_fact_weather_observations
+    WHERE update_ts > '{}'
+"""
 
 # Store exported CSV into STG db
 # - Clear STG observations table from old data
 # - Store clean date to STG (redy to model DWH)
 # As sequence of SQL queries in single transaction
-import_observation_from_csv_to_stg_sql = f"""
+import_observation_from_csv_to_stg_sql = """
     BEGIN;
 
     TRUNCATE TABLE stg_fact_observation;
+    TRUNCATE TABLE stg_fact_weather_observations;
 
     COPY stg_fact_observation
-    FROM '{home_dir}/observations_stg.csv'
+    FROM '{0}/observations_stg.csv'
+    DELIMITER ','
+    CSV HEADER;
+
+    COPY stg_fact_weather_observations
+    FROM '{0}/weather_stg.csv'
     DELIMITER ','
     CSV HEADER;
 
     COMMIT;
 """
 # As stored procedure (single transaction)
-import_observation_from_csv_to_stg_proc = f"""
-    CALL stg_process_observations('{home_dir}', 'observations_stg.csv')
+import_observation_from_csv_to_stg_proc = """
+    CALL stg_process_observations('{0}', 'observations_stg.csv', 'weather_stg.csv')
 """
 
 # -------------------------------------------
@@ -187,14 +206,19 @@ stg_observations_to_csv_sql = """
     SELECT * FROM stg_fact_observation WHERE obsdt > '{}'
 """
 # Export actual bird taxonomy dictionary
-stg_dict_taxonomy_to_csv_sql = f"""
+stg_dict_taxonomy_to_csv_sql = """
     SELECT * FROM stg_fact_taxonomy
 """
-# Create actual public locations dictionary
-stg_dict_location_to_csv_sql = f"""
+# Export actual public locations dictionary
+stg_dict_location_to_csv_sql = """
     SELECT l.locid, l.locname, l.countryname, l.subRegionName, 
             l.lat, l.lon, l.latestObsDt, l.numSpeciesAllTime
     FROM stg_fact_locations l
+"""
+# Export actual weather observations accumulated from previous high water mark ts
+stg_weather_to_csv_sql = """
+    SELECT *
+    FROM stg_fact_weather_observations
 """
 
 # Create actual data model - fact and dimension table for Star Schema
@@ -213,38 +237,50 @@ stg_dict_location_to_csv_sql = f"""
 # - Update current high_water_mark on success of current DAG
 
 # As sequence of SQL queries in single transaction
-dwh_update_model_sql = f"""
+dwh_update_model_sql = """
     BEGIN;
 
     COPY dwh_fact_raw_observations_tmp
-    FROM '{home_dir}/observations_dwh.csv'
+    FROM '{0}/observations_dwh.csv'
+    DELIMITER ','
+    CSV HEADER;
+
+    COPY dwg_fact_weather_observations_tmp
+    FROM '{0}/weather_dwh.csv'
     DELIMITER ','
     CSV HEADER;
 
     TRUNCATE TABLE dwh_dim_species_details;
 
     COPY dwh_dim_species_details
-    FROM '{home_dir}/taxonomy_dwh.csv'
+    FROM '{0}/taxonomy_dwh.csv'
     DELIMITER ','
     CSV HEADER;
 
     TRUNCATE TABLE dwh_dim_location_details;
 
     COPY dwh_dim_location_details
-    FROM '{home_dir}/locations_dwh.csv'
+    FROM '{0}/locations_dwh.csv'
     DELIMITER ','
     CSV HEADER;
-
-    INSERT INTO dwh_fact_observation
-    SELECT subid, speciescode, locid, obsdt, howmany
-    FROM dwh_fact_raw_observations_tmp
-    ON CONFLICT DO NOTHING;   
-
+    
     INSERT INTO dwh_dim_dt
     SELECT DISTINCT obsdt, extract(day from obsdt), extract(month from obsdt),
                     TO_CHAR(obsdt, 'Month'), extract(year from obsdt), extract(quarter from obsdt)
     FROM dwh_fact_raw_observations_tmp
     ON CONFLICT (obsdt) DO NOTHING;
+
+    INSERT INTO dwh_fact_observation
+    SELECT o.subid, o.speciescode, o.locid, o.obsdt, o.howmany
+    FROM dwh_fact_raw_observations_tmp o
+    ON CONFLICT DO NOTHING;
+
+    UPDATE dwh_fact_observation o
+    SET tavg = w.tavg, tmin = w.tmin, tmax = w.tmax, prcp = w.prcp,
+        snow = w.snow, wdir = w.wdir, wspd = w.wspd, wpgt = w.wpgt, 
+        pres = w.pres, tsun = w.tsun
+    FROM dwg_fact_weather_observations_tmp w
+    WHERE o.locid = w.loc_id AND CAST(o.obsdt AS DATE) = w.obsdt;
 
     INSERT INTO dwh_dim_location
     SELECT DISTINCT o.locid, o.locname, o.lat, o.lon, l.countryname,
@@ -266,15 +302,22 @@ dwh_update_model_sql = f"""
     LEFT JOIN dwh_dim_species_details d
     ON o.speciescode = d.speciescode;
 
-    TRUNCATE TABLE dwh_fact_raw_observations_tmp;
-
 	UPDATE high_water_mark
 	SET current_high_ts = (SELECT MAX(obsdt) FROM dwh_fact_observation)
 	WHERE table_id = 'dwh_fact_observation';
+
+	UPDATE high_water_mark
+	SET current_high_ts = (SELECT MAX(update_ts) FROM dwg_fact_weather_observations_tmp)
+	WHERE table_id = 'mrr_fact_weather_observations' AND 
+        (SELECT MAX(update_ts) FROM dwg_fact_weather_observations_tmp) IS NOT NULL;
+
+    TRUNCATE TABLE dwh_fact_raw_observations_tmp;
+    TRUNCATE TABLE dwg_fact_weather_observations_tmp;
                                                     
     COMMIT;
 """
 # As stored procedure (single transaction)
-dwh_update_model_proc = f"""
-    CALL dwh_process_observations('{home_dir}', 'observations_dwh.csv', 'locations_dwh.csv', 'taxonomy_dwh.csv')
+dwh_update_model_proc = """
+    CALL dwh_process_observations('{0}', 'observations_dwh.csv', 'locations_dwh.csv', 
+                                    'taxonomy_dwh.csv', 'weather_dwh.csv')
 """

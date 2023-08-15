@@ -1,5 +1,5 @@
 ### Date created
-2023-08-04
+2023-08-15
 
 
 ### Personal Pet Project: eBird Analytics Data Warehouse
@@ -8,7 +8,9 @@
 
 ### General Description
 
-This pet project contains a simplified implementation of the data pipeline that transforms source data for bird observations (JSON) from eBird data store into the target OLAP data model for the Analytics Data Warehouse.
+This pet project contains a simplified implementation of the data pipeline that transforms source data for bird observations from **eBird** data store (JSON responses from **eBird API 2.0**) into the target OLAP data model for the Analytics Data Warehouse.
+
+As secondary data source **the Meteostat JSON API** was used to ingest weather conditions for locations of bird observations. 
 
 Additionally, the project contains a simple analytical dashboard on the presentation layer (implemented in Power BI). 
 
@@ -45,7 +47,7 @@ The data warehouse database (DWH) also contains several simple functions and sto
 The main ETL pipeline is implemented on Apache Airflow and includes the following steps:
 
 1. **Data extraction from external source (MRR layer)**
-    - Load required dataset in JSON format from eBird document store into target MRR database
+    - Load required dataset in JSON format from eBird and Meteostat document stores into target MRR database
     - Use Spark engine or simple pandas data frame for ingestion
     - Create schema for the source table
     - Save raw source data document to the RDBMS (PostgreSQL) table
@@ -76,6 +78,11 @@ The **scripts** folder contains several scripts for initial system setup and aut
 **Main dataset**: eBird recent bird observations in Georgia region. Ingestion is performed using eBird API 2.0.
 
 API documentation: https://documenter.getpostman.com/view/664302/S1ENwy59
+
+
+**Secondary dataset**: The archive of historical weather data. Ingestion is performed using Meteostat JSON API.
+
+API documentation: https://dev.meteostat.net/api/
 
 
 ### Credits
