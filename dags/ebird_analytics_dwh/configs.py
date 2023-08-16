@@ -321,3 +321,12 @@ dwh_update_model_proc = """
     CALL dwh_process_observations('{0}', 'observations_dwh.csv', 'locations_dwh.csv', 
                                     'taxonomy_dwh.csv', 'weather_dwh.csv')
 """
+
+
+# -------------------------------------------
+# Bash scripts
+# -------------------------------------------
+# Bash script for full backup of all three DBs (MRR, STG, and DWH) in the PostgreSQL instance
+full_backup_sh = "./ebird-full-backup.sh {{ var.value.EBIRD_DB_COMMON_HOST }} \
+ {{ var.value.EBIRD_DB_COMMON_PORT }} {{ var.value.EBIRD_DB_COMMON_USERNAME }} \
+ {{ var.value.EBIRD_DB_COMMON_PASSWORD }} {{ var.value.EBIRD_BACKUP_DIR }} "

@@ -1,5 +1,5 @@
 ### Date created
-2023-08-15
+2023-08-16
 
 
 ### Personal Pet Project: eBird Analytics Data Warehouse
@@ -69,8 +69,10 @@ The main ETL pipeline is implemented on Apache Airflow and includes the followin
     - Use Python connector for PostgreSQL
     - Implemented high water mark mechanism for loading only new data rows from the STG db
 
+4. **Full backup of the three production databases - MRR, STG, and DWH**
+    - Implemented as bash script and can be run independently in shell (**ebird-full-backup.sh**)
 
-The **scripts** folder contains several scripts for initial system setup and automating the full backup of the three databases - MRR, STG, and DWH.
+Script **ebird-airflow_setup** allows you to set up new ETL process and production instances of all databases.
 
 
 ### Data sources

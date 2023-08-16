@@ -25,6 +25,7 @@ import ebird_analytics_dwh.etl_logging as etl_log
 import ebird_analytics_dwh.mrr_process as mrr
 import ebird_analytics_dwh.stg_process as stg
 import ebird_analytics_dwh.dwh_process as dwh
+import ebird_analytics_dwh.configs as sq
 
 # define DAG
 default_args = {
@@ -48,7 +49,7 @@ dag = DAG(
 
 # define tasks
 # Initialize environment
-def etl_start_task(*args, **kwargs):
+def etl_cfg_task(*args, **kwargs):
     print('Initialize environment')
     print('Working dir: ', dag.folder)
     # Read config file on every DAG start and update connections and environments
@@ -58,7 +59,7 @@ def etl_start_task(*args, **kwargs):
     db_list = [('MRR_DB_INSTANCE', 'postgres_mrr_conn'),
                 ('STG_DB_INSTANCE', 'postgres_stg_conn'),
                 ('DWH_DB_INSTANCE', 'postgres_dwh_conn')]
-    for db in db_list:
+    for i, db in enumerate(db_list):
         host = config.get(db[0], 'DB_HOST')
         login = config.get(db[0], 'DB_USER')
         password = config.get(db[0], 'DB_PASSWORD')
@@ -84,6 +85,14 @@ def etl_start_task(*args, **kwargs):
         finally:
             session.add(conn)
             session.commit()
+        
+        # Use common credentials for all backups (To change in future)
+        if i == 2:
+            Variable.set(key="EBIRD_DB_COMMON_HOST", value=host)
+            Variable.set(key="EBIRD_DB_COMMON_PORT", value=port)
+            Variable.set(key="EBIRD_DB_COMMON_USERNAME", value=login)
+            Variable.set(key="EBIRD_DB_COMMON_PASSWORD", value=password)
+
         print(f'Connection {db[1]} created.')
     
     # Update variables
@@ -143,17 +152,17 @@ def etl_start_task(*args, **kwargs):
     Variable.set(key="EBIRD_BACKUP_DIR", value=val)
 
 
-
+# Start ETL, load config parameters
 etl_start_task = PythonOperator(
     task_id='etl_start_task',
     provide_context=True,
-    python_callable = etl_start_task,
+    python_callable = etl_cfg_task,
     dag=dag,
     on_success_callback = etl_log.on_DAG_start_alert,
     on_retry_callback = etl_log.on_DAG_retry_alert,
 )
 
-
+# Load MRR from multiple sources
 load_mrr_from_ebird_task = PythonOperator(
     task_id = 'load_mrr_from_ebird_task',
     provide_context=True,
@@ -163,6 +172,7 @@ load_mrr_from_ebird_task = PythonOperator(
     on_retry_callback = etl_log.on_DAG_retry_alert,
 )
 
+# Load new data into staging area (from MRR to STG db)
 load_stg_from_mrr_task = PythonOperator(
     task_id = 'load_stg_from_mrr_task',
     provide_context=True,
@@ -172,6 +182,8 @@ load_stg_from_mrr_task = PythonOperator(
     on_retry_callback = etl_log.on_DAG_retry_alert,
 )
 
+# Load processed data from staging area
+# into target data model (Star Schema) of DWH 
 load_dwh_from_stg_task = PythonOperator(
     task_id = 'load_dwh_from_stg_task',
     provide_context=True,
@@ -181,14 +193,27 @@ load_dwh_from_stg_task = PythonOperator(
     on_retry_callback = etl_log.on_DAG_retry_alert,
 )
 
+# Create full backups of all three DBs in instance
+full_db_backup_task = BashOperator(
+    task_id = 'full_db_backup_task',
+    bash_command = sq.full_backup_sh,
+    dag = dag,
+    cwd = dag.folder,
+    on_success_callback = etl_log.on_DAG_full_backup_created_alert,
+    on_retry_callback = etl_log.on_DAG_retry_alert,
+)
+
+# End ETL
 etl_end_task = DummyOperator(
     task_id='etl_end_task',
     on_success_callback = etl_log.on_DAG_success_alert,
     on_retry_callback = etl_log.on_DAG_retry_alert,
-    dag=dag)
+    dag=dag
+)
 
 # task pipeline
-etl_start_task >> load_mrr_from_ebird_task >> load_stg_from_mrr_task >> load_dwh_from_stg_task >> etl_end_task
-
-
-
+etl_start_task              >> load_mrr_from_ebird_task 
+load_mrr_from_ebird_task    >> load_stg_from_mrr_task 
+load_stg_from_mrr_task      >> load_dwh_from_stg_task 
+load_dwh_from_stg_task      >> full_db_backup_task
+full_db_backup_task         >> etl_end_task

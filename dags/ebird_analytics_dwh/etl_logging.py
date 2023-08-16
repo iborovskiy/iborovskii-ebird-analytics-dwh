@@ -41,6 +41,9 @@ def on_DAG_stg_loaded_alert(context):
 def on_DAG_dwh_loaded_alert(context):
     log_msg(datetime.datetime.now(), INFO_MSG, f"OLAP model in DWH db successfully updated wuth new data from STG, DAG run at {context['ts']}.")
 
+def on_DAG_full_backup_created_alert(context):
+    log_msg(datetime.datetime.now(), INFO_MSG, f"Full backup of databased successfully created, DAG run at {context['ts']}.")
+
 def on_DAG_success_alert(context):
     log_msg(datetime.datetime.now(), INFO_MSG, f"Daily DAG has been completed, DAG run at {context['ts']}.")
 
