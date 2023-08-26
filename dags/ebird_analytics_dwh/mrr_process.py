@@ -110,13 +110,12 @@ def ingest_new_rows_from_csv(*args, **kwargs):
                                     'subnational1Name', 'subnational1Code', 'isHotspot', 'locName',
                                     'lat', 'lng', 'hierarchicalName', 'locID'])
     obs_df = pd.DataFrame(columns = ['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsDt', 'obsTime', 'subID'])
-    #for dt in pd.date_range(high_water_mark, datetime.datetime.now() - datetime.timedelta(days=1),freq='d'):
-    for dt in pd.date_range(high_water_mark, datetime.datetime.now(),freq='d'):
+    for dt in pd.date_range(high_water_mark.date(), datetime.datetime.now().date(), freq='d'):
         # Make request for checklists for given day
         r = requests.get(sq.url_cl_ist.format(regionCode, dt.year, dt.month, dt.day), headers = {'X-eBirdApiToken' : api_key})
         # Check status
         if r.status_code == 200:
-            print('Request completed successfully!')
+            print(f'Request completed successfully for {dt}!')
         else:
             print(f'Error! Code - {r.status_code}')
             raise ValueError('Bad response from e-bird')

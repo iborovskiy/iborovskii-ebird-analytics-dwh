@@ -6,7 +6,7 @@ then
 else
 
 	echo "Install dependencies..."
-	pip install pandas findspark pyspark requests apache-airflow-providers-postgres
+	pip install -r requirements.txt
 
 	echo
 	echo "Postgres databases setup..."

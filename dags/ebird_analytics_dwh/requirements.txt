@@ -1,0 +1,5 @@
+pandas
+findspark
+pyspark
+requests
+apache-airflow-providers-postgres
