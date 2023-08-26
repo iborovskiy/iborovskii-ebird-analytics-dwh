@@ -42,8 +42,8 @@ dag = DAG(
     dag_id='ebird-analytics-dwh',
     default_args=default_args,
     description='Analytics DWH for the eBird observations',
-    schedule_interval=timedelta(days=1),
-    catchup=False,
+    schedule_interval=timedelta(hours=6),
+    catchup=True,
     on_failure_callback = etl_log.on_DAG_error_alert,
 )
 

@@ -67,13 +67,15 @@ END;
 $BODY$;
 
 
--- PROCEDURE: public.mrr_process_new_observations(character varying, character varying)
+-- PROCEDURE: public.mrr_process_new_observations(character varying, character varying, character varying, character varying)
 -- Ingest new observations from ebird
 
--- DROP PROCEDURE IF EXISTS public.mrr_process_new_observations(character varying, character varying);
+-- DROP PROCEDURE IF EXISTS public.mrr_process_new_observations(character varying, character varying, character varying, character varying);
 
 CREATE OR REPLACE PROCEDURE public.mrr_process_new_observations(
 	IN path_to_csv character varying,
+	IN loc_filename character varying,
+	IN cl_filename character varying,
 	IN obs_filename character varying)
 LANGUAGE 'plpgsql'
 AS $BODY$
@@ -84,8 +86,28 @@ BEGIN
 	EXECUTE format
 	(
 		$str$
-			COPY mrr_fact_recent_observation_tmp(speciescode, sciname, locid, locname, obsdt, howmany, lat, lon,
-												 obsvalid, obsreviewed, locationprivate, subid, comname, exoticcategory)
+			COPY mrr_fact_location_tmp(locId, countryCode, countryName, subnational1Name, subnational1Code,
+                                		isHotspot, locName, lat, lng, hierarchicalName, obsFullDt)
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || loc_filename
+	);
+	
+	EXECUTE format
+	(
+		$str$
+			COPY mrr_fact_checklist_tmp(locId, subId, userDisplayName, numSpecies, obsFullDt)
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || cl_filename
+	);
+	
+	EXECUTE format
+	(
+		$str$
+			COPY mrr_fact_observation_tmp(speciesCode, obsDt, subId, projId, obsId, howMany, present)
 			FROM %L
 			DELIMITER ','
 			CSV HEADER
@@ -93,13 +115,40 @@ BEGIN
 	);
 
 	-- copy new data from tmp table into target fact table
-	INSERT INTO mrr_fact_recent_observation
+    INSERT INTO mrr_fact_location
     SELECT *
-    FROM mrr_fact_recent_observation_tmp
-    ON CONFLICT(speciesCode, subId) DO NOTHING;
+    FROM mrr_fact_location_tmp
+    ON CONFLICT (locId) DO UPDATE
+    SET countryCode = EXCLUDED.countryCode, countryName = EXCLUDED.countryName,
+        subnational1Name = EXCLUDED.subnational1Name,
+        subnational1Code = EXCLUDED.subnational1Code,
+        isHotspot = EXCLUDED.isHotspot, locName = EXCLUDED.locName,
+        lat = EXCLUDED.lat, lng = EXCLUDED.lng,
+        hierarchicalName = EXCLUDED.hierarchicalName,
+        obsFullDt = EXCLUDED.obsFullDt;
+		
+    INSERT INTO mrr_fact_checklist
+    SELECT *
+    FROM mrr_fact_checklist_tmp
+    ON CONFLICT (subId) DO UPDATE
+    SET locId = EXCLUDED.locId, userDisplayName = EXCLUDED.userDisplayName,
+        numSpecies = EXCLUDED.numSpecies,
+        obsFullDt = EXCLUDED.obsFullDt;
+		
+    INSERT INTO mrr_fact_observation
+    SELECT *
+    FROM mrr_fact_observation_tmp
+    ON CONFLICT (obsId) DO UPDATE
+    SET speciesCode = EXCLUDED.speciesCode, obsDt = EXCLUDED.obsDt,
+        subId = EXCLUDED.subId,
+        projId = EXCLUDED.projId,
+        howMany = EXCLUDED.howMany,
+        present = EXCLUDED.present;
 					
 	-- delete temporary table
-	DELETE FROM mrr_fact_recent_observation_tmp;
+	TRUNCATE TABLE mrr_fact_location_tmp;
+	TRUNCATE TABLE mrr_fact_checklist_tmp;
+	TRUNCATE TABLE mrr_fact_observation_tmp;
 
 END;
 $BODY$;

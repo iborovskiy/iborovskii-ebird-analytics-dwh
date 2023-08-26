@@ -17,14 +17,14 @@ DECLARE
 BEGIN
 
 	-- clear STG dictionaries tables from old data
-	TRUNCATE TABLE stg_fact_locations;
+	TRUNCATE TABLE stg_fact_hotspots;
 	TRUNCATE TABLE stg_fact_taxonomy;
 	
 	-- import new data from csv files into dictionaries tables
 	EXECUTE format
 	(
 		$str$
-			COPY stg_fact_locations
+			COPY stg_fact_hotspots
 			FROM %L
 			DELIMITER ','
 			CSV HEADER
@@ -60,13 +60,15 @@ END;
 $BODY$;
 
 
--- PROCEDURE: public.stg_process_observations(character varying, character varying)
+-- PROCEDURE: public.stg_process_observations(character varying, character varying, character varying, character varying, character varying)
 -- Import new observations from CSV into Staging area
 
--- DROP PROCEDURE IF EXISTS public.stg_process_observations(character varying, character varying);
+-- DROP PROCEDURE IF EXISTS public.stg_process_observations(character varying, character varying, character varying, character varying, character varying);
 
 CREATE OR REPLACE PROCEDURE public.stg_process_observations(
 	IN path_to_csv character varying,
+	IN loc_filename character varying,
+	IN cl_filename character varying,
 	IN obs_filename character varying,
 	IN weather_filename character varying)
 LANGUAGE 'plpgsql'
@@ -76,10 +78,32 @@ DECLARE
 BEGIN
 
 	-- clear STG observation table from old data
-	TRUNCATE TABLE stg_fact_observation;
-	TRUNCATE TABLE stg_fact_weather_observations;
+    TRUNCATE TABLE stg_fact_location;
+    TRUNCATE TABLE stg_fact_checklist;
+    TRUNCATE TABLE stg_fact_observation;
+    TRUNCATE TABLE stg_fact_weather_observations;
 	
 	-- import new data from csv files into staging area
+	EXECUTE format
+	(
+		$str$
+			COPY stg_fact_location
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || loc_filename
+	);
+	
+	EXECUTE format
+	(
+		$str$
+			COPY stg_fact_checklist
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || cl_filename
+	);
+
 	EXECUTE format
 	(
 		$str$

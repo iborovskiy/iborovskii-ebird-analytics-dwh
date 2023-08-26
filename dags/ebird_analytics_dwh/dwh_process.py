@@ -30,11 +30,19 @@ def load_dwh_from_stg(*args, **kwargs):
 
     # Export data accumulated in staging area (STG db) into CSV files
         
-    # Export new observation accumulated from previous high water mark ts
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_observations_to_csv_sql.format(high_water_mark)),
-                                    columns = ['speciesCode', 'sciName', 'locId', 'locName',
-                                    'obsDt', 'howMany', 'lat', 'lon', 'subId', 'comName'])
-    stg_new_frame.to_csv(home_dir + '/observations_dwh.csv', index = False)
+    # Export new observations accumulated from previous high water mark ts
+    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_location_to_csv_sql.format(high_water_mark)),
+                                    columns = ['locid', 'locname', 'lat', 'lon',
+                                    'countryname', 'subregionname', 'latestobsdt', 'numspeciesalltime'])
+    stg_new_frame.to_csv(home_dir + '/dwh_location.csv', index = False)
+    
+    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_checklist_to_csv_sql.format(high_water_mark)),
+                                    columns = ['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsFullDt'])
+    stg_new_frame.to_csv(home_dir + '/dwh_checklist.csv', index = False)
+
+    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_observation_to_csv_sql.format(high_water_mark)),
+                                    columns = ['speciescode', 'obsdt', 'subid', 'obsid', 'howmany'])
+    stg_new_frame.to_csv(home_dir + '/dwh_observation.csv', index = False)
     print('Importing', len(stg_new_frame), 'new observations.')
 
     # Export actual bird taxonomy dictionary
@@ -42,19 +50,19 @@ def load_dwh_from_stg(*args, **kwargs):
                                     columns = ['speciesCode', 'sciName', 'comName', 
                                                 'category', 'orderSciName', 'orderComName', 
                                                 'familyCode', 'familyComName', 'familySciName'])
-    stg_new_frame.to_csv(home_dir + '/taxonomy_dwh.csv', index = False)
+    stg_new_frame.to_csv(home_dir + '/dwh_taxonomy.csv', index = False)
 
     # Export actual public locations dictionary
     stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_dict_location_to_csv_sql),
                                     columns = ['locId', 'locName', 'countryName', 
                                                 'subRegionName', 'lat', 'lon', 'latestObsDt', 'numSpeciesAllTime'])
-    stg_new_frame.to_csv(home_dir + '/locations_dwh.csv', index = False)
+    stg_new_frame.to_csv(home_dir + '/dwh_hotspots.csv', index = False)
 
-    # Export actual weather stations dictionary
+    # Export actual weather observations accumulated from previous high water mark ts
     stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_weather_to_csv_sql),
                                     columns = ['loc_id', 'obsdt', 'tavg', 'tmin', 'tmax', 'prcp', 'snow', 
                                                'wdir', 'wspd', 'wpgt', 'pres', 'tsun', 'update_ts'])
-    stg_new_frame.to_csv(home_dir + '/weather_dwh.csv', index = False)
+    stg_new_frame.to_csv(home_dir + '/dwh_weather.csv', index = False)
 
 
     # Create actual data model - fact and dimension table for Star Schema
@@ -85,10 +93,12 @@ def load_dwh_from_stg(*args, **kwargs):
     print('All fact and dimension tables of DWH are updated.')
 
     # Remove temporary csv files
-    os.remove(home_dir + '/observations_dwh.csv')
-    os.remove(home_dir + '/taxonomy_dwh.csv')
-    os.remove(home_dir + '/locations_dwh.csv')
-    os.remove(home_dir + '/weather_dwh.csv')
+    os.remove(home_dir + '/dwh_taxonomy.csv')
+    os.remove(home_dir + '/dwh_hotspots.csv')
+    os.remove(home_dir + '/dwh_location.csv')
+    os.remove(home_dir + '/dwh_checklist.csv')
+    os.remove(home_dir + '/dwh_observation.csv')
+    os.remove(home_dir + '/dwh_weather.csv')
 
     # Close the connection to STG and MRR db
     pgs_stg_hook.conn.close()

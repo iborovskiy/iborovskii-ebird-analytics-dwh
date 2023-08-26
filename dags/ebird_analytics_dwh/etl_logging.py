@@ -51,6 +51,6 @@ def on_DAG_error_alert(context):
     log_msg(datetime.datetime.now(), ERROR_MSG, f"Daily DAG has been failed, task_instance_key_str={context['task_instance_key_str']}, DAG run at {context['ts']}.")
 
 def on_DAG_retry_alert(context):
-    log_msg(datetime.datetime.now(), ERROR_MSG, f"Daily DAG encountered a problem and task is up to retry, \
-            task_instance_key_str={context['task_instance_key_str']}, DAG run at {context['ts']}.")
+    log_msg(datetime.datetime.now(), ERROR_MSG,
+            f"Daily DAG encountered a problem and task is up to retry, task_instance_key_str={context['task_instance_key_str']}, DAG run at {context['ts']}.")
 

@@ -56,16 +56,16 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
     # Exporting loaded dictionaries into csv
     df_loc['latestObsDt'] = pd.to_datetime(df_loc['latestObsDt'])
     new_rows = df_loc[['locId', 'locName', 'countryCode', 'subnational1Code', 'lat', 'lng', 'latestObsDt', 'numSpeciesAllTime']]
-    new_rows.to_csv(home_dir + '/locations.csv', index = False)
+    new_rows.to_csv(home_dir + '/mrr_hotspots.csv', index = False)
 
     new_rows = df_countries[['code', 'name']]
-    new_rows.to_csv(home_dir + '/countries.csv', index = False)
+    new_rows.to_csv(home_dir + '/mrr_countries.csv', index = False)
 
     new_rows = df_subregions[['code', 'name']]
-    new_rows.to_csv(home_dir + '/subregions.csv', index = False)
+    new_rows.to_csv(home_dir + '/mrr_subregions.csv', index = False)
 
     new_rows = df_taxonomy[['speciesCode', 'sciName', 'comName', 'category', 'order', 'familyCode', 'familySciName']]
-    new_rows.to_csv(home_dir + '/taxonomy.csv', index = False)
+    new_rows.to_csv(home_dir + '/mrr_taxonomy.csv', index = False)
 
     # Loading dictionaries in MRR database
     pgs_mrr_hook = PostgresHook(postgres_conn_id="postgres_mrr_conn")
@@ -81,10 +81,10 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
     pgs_mrr_hook.run(sql_q)
 
     # Remove temporary csv files
-    os.remove(home_dir + '/locations.csv')
-    os.remove(home_dir + '/countries.csv')
-    os.remove(home_dir + '/subregions.csv')
-    os.remove(home_dir + '/taxonomy.csv')
+    os.remove(home_dir + '/mrr_hotspots.csv')
+    os.remove(home_dir + '/mrr_countries.csv')
+    os.remove(home_dir + '/mrr_subregions.csv')
+    os.remove(home_dir + '/mrr_taxonomy.csv')
 
     # Close the connection to MRR db
     pgs_mrr_hook.conn.close()
@@ -92,9 +92,7 @@ def load_mrr_dictionaries_from_ebird(*args, **kwargs):
 
 def ingest_new_rows_from_csv(*args, **kwargs):
     # Get DAG variables values
-    locale = Variable.get("EBIRD_LOCALE", default_var='ru')                     # Language for common name
     regionCode = Variable.get("EBIRD_REGION_CODE", default_var='GE')            # Geographic location for analysis
-    days_back = Variable.get("EBIRD_DAYS_BACK", default_var='30')               # How many days back to fetch
     USE_SPARK = False if Variable.get("EBIRD_USE_SPARK",
                 default_var='false').lower() == 'false' else True               # Work mode - Spark / Local pandas df
     DWH_INTERNAL_MODEL = False if Variable.get("EBIRD_DWH_INTERNAL_MODEL", 
@@ -102,22 +100,34 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     api_key = Variable.get("EBIRD_API_KEY", default_var=None)                   # API Key
     meteostat_api_key = Variable.get("EBIRD_WEATHER_API_KEY", default_var=None) # Weather API Key
     home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')              # Temporary working directory
-
-    # Make request
-    r = requests.get(sq.url.format(regionCode, locale, days_back), headers = {'X-eBirdApiToken' : api_key})
-    # Check status
-    if r.status_code != 200:
-        raise ValueError('Bad response from e-bird')
     
-    # Load results from JSON to pandas df
-    df = pd.DataFrame(r.json())
-    print('Extracted obeservations from ebird source - ', len(df), 'rows.')
-
     # Load current high_water_mark
     high_water_mark = etl_log.load_high_water_mark()
     print(f"high_water_mark = {high_water_mark}")
 
+    # Ingest new checklists and locations
+    loc_df = pd.DataFrame(columns=['locId', 'name', 'latitude', 'longitude', 'countryCode', 'countryName',
+                                    'subnational1Name', 'subnational1Code', 'isHotspot', 'locName',
+                                    'lat', 'lng', 'hierarchicalName', 'locID'])
+    obs_df = pd.DataFrame(columns = ['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsDt', 'obsTime', 'subID'])
+    #for dt in pd.date_range(high_water_mark, datetime.datetime.now() - datetime.timedelta(days=1),freq='d'):
+    for dt in pd.date_range(high_water_mark, datetime.datetime.now(),freq='d'):
+        # Make request for checklists for given day
+        r = requests.get(sq.url_cl_ist.format(regionCode, dt.year, dt.month, dt.day), headers = {'X-eBirdApiToken' : api_key})
+        # Check status
+        if r.status_code == 200:
+            print('Request completed successfully!')
+        else:
+            print(f'Error! Code - {r.status_code}')
+            raise ValueError('Bad response from e-bird')
+        
+        # Load results from JSON to pandas df
+        df = pd.DataFrame(r.json())
+        # Combine all results in shared dateframes - one for locations and one for observations
+        loc_df = pd.concat([loc_df, df['loc'].apply(pd.Series)])
+        obs_df = pd.concat([obs_df, df[['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsDt', 'obsTime', 'subID']]])
 
+    
     if USE_SPARK:
         # Use Spark to transform source dataset
 
@@ -129,29 +139,55 @@ def ingest_new_rows_from_csv(*args, **kwargs):
             .config("spark.driver.maxResultSize", "0.5G")\
             .appName("ETL Spark process").getOrCreate()
         spark.sparkContext.setSystemProperty('spark.executor.memory', '0.5G')
-        # Transform pandas df to Spark df and export ingested rows into csv file
-        sdf = spark.createDataFrame(df) 
-        sdf.createTempView("tmp_ebird_recent")
+        s_obs_df = spark.createDataFrame(obs_df)
+        s_loc_df = spark.createDataFrame(loc_df)
+        s_obs_df.createTempView("tmp_ebird_checklists")
+        s_loc_df.createTempView("tmp_ebird_locations")
         new_rows = spark.sql(sq.spark_sql_req.format(high_water_mark)).collect()
-
-        new_rows.write.csv(home_dir + '/observations.csv')
+        print('Deprecated and removed! There is no demand for Spark distributed data processing for such a small workload.')
+        raise ValueError("This mode isn't supported anymore!")
+        # REMOVED!
 
     else:
-        # Use pandas df to transform source dataset
+        # Process new location records
+        loc_df = loc_df.drop_duplicates()
+        loc_df = loc_df.drop(labels=['name', 'latitude', 'longitude', 'locID'], axis=1)
+        loc_df['obsFullDt'] = datetime.datetime.now()
 
-        # Filter out old records using high_water_mark and export ingested rows into csv file
-        df['obsDt'] = pd.to_datetime(df['obsDt'])
-        df = df[df['obsDt'] > high_water_mark]
-        new_rows = df[['speciesCode', 'sciName', 'locId', 'locName', 'obsDt', 'howMany', 'lat', 'lng',
-                        'obsValid', 'obsReviewed', 'locationPrivate', 'subId', 'comName']]
-        if 'exoticCategory' in df.columns:
-            new_rows['exoticCategory'] = df['exoticCategory']
-        else:
-            new_rows['exoticCategory'] = None
+        # Process new checklist records
+        obs_df = obs_df.drop_duplicates()
+        obs_df['obsTime'] = obs_df['obsTime'].astype(str)
+        obs_df.loc[obs_df['obsTime'] == 'nan', 'obsTime'] = '00:00'
+        obs_df['obsFullDt'] = pd.to_datetime(obs_df['obsDt'] + ' ' + obs_df['obsTime'])
+        obs_df = obs_df.drop(labels=['obsDt', 'obsTime', 'subID'], axis=1)
+        obs_df = obs_df[obs_df['obsFullDt'] > high_water_mark]
 
-        new_rows.to_csv(home_dir + '/observations.csv', index = False)
+        print('Extracted new checklists from ebird source - ', len(obs_df), 'rows.')
 
-    print('Loaded observations from ebird source - ', len(new_rows), 'rows.')
+        # Process new observation records
+        obs_details_df = pd.DataFrame(columns=['speciesCode', 'obsDt', 'subId', 'projId', 'obsId', 
+                                               'howManyStr', 'present'])
+        for sub_id in obs_df['subId']:
+            # Make request
+            r = requests.get(sq.url_get_cl.format(sub_id), headers = {'X-eBirdApiToken' : api_key})
+            # Check status
+            if r.status_code == 200:
+                print('Request completed successfully!')
+            else:
+                print(f'Error! Code - {r.status_code}')
+                raise ValueError('Bad response from e-bird')
+            df = pd.DataFrame(r.json()['obs'])
+            obs_details_df = pd.concat([obs_details_df, df[['speciesCode', 'obsDt', 'subId', 'projId', 'obsId', 'howManyStr', 'present']]])
+    
+        obs_details_df.loc[obs_details_df['howManyStr'] == 'X', 'howManyStr'] = '0'
+        obs_details_df['howManyStr'].astype(int)
+
+        print('Extracted new observstions from ebird source - ', len(obs_details_df), 'rows.')
+
+        # Exporting new ingested records to CSV files
+        loc_df.to_csv(home_dir + '/mrr_location.csv', index = False)
+        obs_df.to_csv(home_dir + '/mrr_checklist.csv', index = False)
+        obs_details_df.to_csv(home_dir + '/mrr_observation.csv', index=False)
 
     # Import prepared csv file into the MRR database (through temporary table)
     pgs_mrr_hook = PostgresHook(postgres_conn_id="postgres_mrr_conn")
@@ -160,17 +196,23 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     if DWH_INTERNAL_MODEL == False:
         # Use several SQL queries in single transaction
         print("Use external load mode of MRR")
-        sql_q = sq.ingest_observations_sql.format(home_dir)
+        sql_q = sq.ingest_checklists_sql.format(home_dir)
     else:
         # Use stored procedure from MRR db (single transaction)
         print("Use internal load mode of MRR")
         sql_q = sq.ingest_observations_proc.format(home_dir)
     pgs_mrr_hook.run(sql_q)
+    
+
+    # Remove temporary csv files
+    os.remove(home_dir + '/mrr_location.csv')
+    os.remove(home_dir + '/mrr_checklist.csv')
+    os.remove(home_dir + '/mrr_observation.csv')
 
     # Load weather conditions for all locations of new observations
     # Update interval is set to 10 days and applied algorithm for reduction of number of API calls (for API billing purposes)
     weather_high_water_mark = etl_log.load_high_water_mark('mrr_fact_weather_observations')
-    if datetime.datetime.now() - weather_high_water_mark > datetime.timedelta(days=10):
+    if datetime.datetime.now() - weather_high_water_mark > datetime.timedelta(days=31):
         print('Time to update weather')
         pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
         new_weather_rows = pgs_dwh_hook.get_records(sq.get_weather_sql.format(high_water_mark))
@@ -203,19 +245,15 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     else:
         print(f'Skip weather update. {weather_high_water_mark=}, Current time - {datetime.datetime.now()}.')
 
-    # Remove temporary csv files
-    os.remove(home_dir + '/observations.csv')
-
     # Close the connection to MRR db
     pgs_mrr_hook.conn.close()
 
     # Make log record on success
-    etl_log.log_msg(datetime.datetime.now(), etl_log.INFO_MSG, f"{len(new_rows)} new observation rows ingested from e-bird source, DAG run at {kwargs['ts']}.")
+    etl_log.log_msg(datetime.datetime.now(), etl_log.INFO_MSG,
+                    f"{len(obs_df)} new checklists and observations ingested from e-bird source, DAG run at {kwargs['ts']}.")
 
 
 def load_mrr_from_ebird(*args, **kwargs):
         load_mrr_dictionaries_from_ebird(*args, **kwargs)
         return ingest_new_rows_from_csv(*args, **kwargs)
-
-
 

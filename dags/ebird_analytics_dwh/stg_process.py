@@ -28,13 +28,13 @@ def load_stg_dictionaries_from_mrr():
     mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_dict_locations_to_csv_sql), 
                                     columns = ['locid', 'locname', 'countryname', 'subregionname', 
                                                 'lat', 'lon', 'latestobsdt', 'numspeciesalltime'])
-    mrr_new_frame.to_csv(home_dir + '/locations_stg.csv', index = False)
+    mrr_new_frame.to_csv(home_dir + '/stg_hotspots.csv', index = False)
 
     mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_dict_taxonomy_to_csv_sql),
                                     columns = ['speciesCode', 'sciName', 'comName', 'category',
                                                 'orderSciName', 'orderComName', 'familyCode',
                                                 'familyComName', 'familySciName'])
-    mrr_new_frame.to_csv(home_dir + '/taxonomy_stg.csv', index = False)
+    mrr_new_frame.to_csv(home_dir + '/stg_taxonomy.csv', index = False)
 
     # Store exported dictionaries into STG db
     # - Clear STG dictionaries tables from old data
@@ -53,8 +53,8 @@ def load_stg_dictionaries_from_mrr():
     pgs_stg_hook.run(sql_q)
 
     # Remove temporary csv files
-    os.remove(home_dir + '/locations_stg.csv')
-    os.remove(home_dir + '/taxonomy_stg.csv')
+    os.remove(home_dir + '/stg_hotspots.csv')
+    os.remove(home_dir + '/stg_taxonomy.csv')
 
     # Close the connection to STG and MRR db
     pgs_mrr_hook.conn.close()
@@ -78,16 +78,25 @@ def load_stg_from_mrr(*args, **kwargs):
     print(f"weather_high_water_mark = {weather_high_water_mark}")
 
     # Export trusted new data rows for observations from MRR db to CSV files (incremental using high water mark)
-    mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_observations_to_csv_sql.format(high_water_mark)),
-                                    columns = ['speciesCode', 'sciName', 'locId', 'locName',
-                                                'obsDt', 'howMany', 'lat', 'lon', 'subId', 'comName'])
-    mrr_new_frame.to_csv(home_dir + '/observations_stg.csv', index = False)
+    mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_fact_locations_to_csv_sql.format(high_water_mark)),
+                                    columns = ['locid', 'countryname', 'subnational1name', 'ishotspot', 'locname',
+                                               'lat', 'lng', 'hierarchicalname', 'obsfulldt'])
+    mrr_new_frame.to_csv(home_dir + '/stg_location.csv', index = False)
+
+    mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_fact_checklists_to_csv_sql.format(high_water_mark)),
+                                    columns = ['locid', 'subid', 'userdisplayname', 'numspecies',
+                                                'obsfulldt'])
+    mrr_new_frame.to_csv(home_dir + '/stg_checklist.csv', index = False)
+
+    mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_fact_observations_to_csv_sql.format(high_water_mark)),
+                                    columns = ['speciesCode', 'obsDt', 'subId', 'obsId', 'howMany'])
+    mrr_new_frame.to_csv(home_dir + '/stg_observation.csv', index = False)
 
     # Export new weather observation for updated locations (incremental using high water mark)
     mrr_new_frame = pd.DataFrame(pgs_mrr_hook.get_records(sq.mrr_weather_to_csv_sql.format(weather_high_water_mark)),
                                     columns = ['loc_id', 'obsdt', 'tavg', 'tmin',
                                                 'tmax', 'prcp', 'snow', 'wdir', 'wspd', 'wpgt', 'pres', 'tsun', 'update_ts'])
-    mrr_new_frame.to_csv(home_dir + '/weather_stg.csv', index = False)
+    mrr_new_frame.to_csv(home_dir + '/stg_weather.csv', index = False)
     
     # Store exported CSV into STG db
     # - Clear STG observations table from old data
@@ -106,8 +115,10 @@ def load_stg_from_mrr(*args, **kwargs):
     print('Stored to STG - ', len(mrr_new_frame), 'rows.')
 
     # Remove temporary csv files
-    os.remove(home_dir + '/observations_stg.csv')
-    os.remove(home_dir + '/weather_stg.csv')
+    os.remove(home_dir + '/stg_checklist.csv')
+    os.remove(home_dir + '/stg_location.csv')
+    os.remove(home_dir + '/stg_observation.csv')
+    os.remove(home_dir + '/stg_weather.csv')
 
     # Load and transform dictionaries from MRR to STG
     load_stg_dictionaries_from_mrr()

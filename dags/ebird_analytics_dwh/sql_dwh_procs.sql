@@ -1,16 +1,16 @@
 -- Stored procedures in DWH db
 
--- PROCEDURE: public.dwh_process_observations(character varying, character varying, character varying, character varying)
+-- PROCEDURE: public.dwh_process_observations(character varying, character varying, character varying, character varying, character varying, character varying, character varying)
 -- Import new observations from CSV into DWH and create OLAP data model (Star Schema)
 
--- DROP PROCEDURE IF EXISTS public.dwh_process_observations(character varying, character varying, character varying, character varying);
-
--- DROP PROCEDURE IF EXISTS public.dwh_process_observations(character varying, character varying, character varying, character varying, character varying);
+-- DROP PROCEDURE IF EXISTS public.dwh_process_observations(character varying, character varying, character varying, character varying, character varying, character varying, character varying);
 
 CREATE OR REPLACE PROCEDURE public.dwh_process_observations(
 	IN path_to_csv character varying,
-	IN obs_filename character varying,
 	IN loc_filename character varying,
+	IN cl_filename character varying,
+	IN obs_filename character varying,
+	IN hs_filename character varying,
 	IN taxonomy_filename character varying,
 	IN weather_filename character varying)
 LANGUAGE 'plpgsql'
@@ -24,7 +24,27 @@ BEGIN
 	EXECUTE format
 	(
 		$str$
-			COPY dwh_fact_raw_observations_tmp
+			COPY dwh_dim_location_tmp
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || loc_filename
+	);
+
+	EXECUTE format
+	(
+		$str$
+			COPY dwh_dim_checklist_tmp
+			FROM %L
+			DELIMITER ','
+			CSV HEADER
+		$str$, path_to_csv || '/' || cl_filename
+	);
+
+	EXECUTE format
+	(
+		$str$
+			COPY dwh_fact_observation_tmp
 			FROM %L
 			DELIMITER ','
 			CSV HEADER
@@ -35,7 +55,7 @@ BEGIN
 	EXECUTE format
 	(
 		$str$
-			COPY dwg_fact_weather_observations_tmp
+			COPY dwh_fact_weather_observations_tmp
 			FROM %L
 			DELIMITER ','
 			CSV HEADER
@@ -65,48 +85,60 @@ BEGIN
 			FROM %L
 			DELIMITER ','
 			CSV HEADER
-		$str$, path_to_csv || '/' || loc_filename
+		$str$, path_to_csv || '/' || hs_filename
 	);
 
 	-- create new data model for DWH
+	
+	-- create dimension table - dwh_dim_location (incremental update)
+    INSERT INTO dwh_dim_location
+    SELECT DISTINCT l.locid, l.locname, l.lat, l.lon, l.countryname, l.subregionname,
+                    l.latestobsdt, d.numspeciesalltime
+    FROM dwh_dim_location_tmp l
+    LEFT JOIN dwh_dim_location_details d
+    ON l.locid = d.locid
+    ON CONFLICT (locid) DO UPDATE
+    SET locname = EXCLUDED.locname, lat = EXCLUDED.lat, lon = EXCLUDED.lon,
+        countryname = EXCLUDED.countryname, subRegionName = EXCLUDED.subRegionName,
+        latestObsDt = EXCLUDED.latestObsDt, numSpeciesAllTime = EXCLUDED.numSpeciesAllTime;
 
 	-- create dimension table - dwh_dim_dt (incremental update)
-	INSERT INTO dwh_dim_dt
+    INSERT INTO dwh_dim_dt
     SELECT DISTINCT obsdt, extract(day from obsdt), extract(month from obsdt),
                     TO_CHAR(obsdt, 'Month'), extract(year from obsdt), extract(quarter from obsdt)
-    FROM dwh_fact_raw_observations_tmp
+    FROM dwh_fact_observation_tmp
     ON CONFLICT (obsdt) DO NOTHING;
+	
+	-- create dimension table - dwh_dim_checklist (incremental update)
+	
+    INSERT INTO dwh_dim_checklist
+    SELECT DISTINCT c.locId, c.subId, c.userDisplayName, c.numSpecies, c.obsFullDt
+    FROM dwh_dim_checklist_tmp c
+    ON CONFLICT (subId) DO UPDATE
+    SET locId = EXCLUDED.locId, userDisplayName = EXCLUDED.userDisplayName,
+        numSpecies = EXCLUDED.numSpecies, obsFullDt = EXCLUDED.obsFullDt;
 
 	-- create fact table - dwh_fact_observation (incremental update)
     INSERT INTO dwh_fact_observation
-    SELECT o.subid, o.speciescode, o.locid, o.obsdt, o.howmany
-    FROM dwh_fact_raw_observations_tmp o
-    ON CONFLICT DO NOTHING;
+    SELECT o.subid, o.speciescode, c.locId, o.obsdt, o.howmany
+    FROM dwh_fact_observation_tmp o
+    LEFT JOIN dwh_dim_checklist c
+    ON o.subid = c.subid
+    ON CONFLICT (subId, speciescode) DO UPDATE
+    SET locId = EXCLUDED.locId, obsdt = EXCLUDED.obsdt, howmany = EXCLUDED.howmany;
 	
 	-- update weather conditions for observations
     UPDATE dwh_fact_observation o
     SET tavg = w.tavg, tmin = w.tmin, tmax = w.tmax, prcp = w.prcp,
         snow = w.snow, wdir = w.wdir, wspd = w.wspd, wpgt = w.wpgt, 
         pres = w.pres, tsun = w.tsun
-    FROM dwg_fact_weather_observations_tmp w
+    FROM dwh_fact_weather_observations_tmp w
     WHERE o.locid = w.loc_id AND CAST(o.obsdt AS DATE) = w.obsdt;
-
-	-- create dimension table - dwh_dim_location (incremental update)
-	INSERT INTO dwh_dim_location
-    SELECT DISTINCT o.locid, o.locname, o.lat, o.lon, l.countryname,
-                    l.subRegionName, l.latestObsDt, l.numSpeciesAllTime
-    FROM dwh_fact_raw_observations_tmp o
-    LEFT JOIN dwh_dim_location_details l
-    ON o.locid = l.locid
-    ON CONFLICT (locid) DO UPDATE
-    SET locname = EXCLUDED.locname, lat = EXCLUDED.lat, lon = EXCLUDED.lon,
-        countryname = EXCLUDED.countryname, subRegionName = EXCLUDED.subRegionName,
-        latestObsDt = EXCLUDED.latestObsDt, numSpeciesAllTime = EXCLUDED.numSpeciesAllTime;
 		
 	-- create dimension table - dwh_dim_species (full update not incremental)
 	TRUNCATE TABLE dwh_dim_species;
 	
-	INSERT INTO dwh_dim_species
+    INSERT INTO dwh_dim_species
     SELECT DISTINCT o.speciescode, d.sciName, d.comName, d.category, d.orderSciName, d.orderComName,
                     d.familyCode, d.familyComName, d.familySciName
     FROM dwh_fact_observation o
@@ -119,13 +151,15 @@ BEGIN
 	WHERE table_id = 'dwh_fact_observation';
 
 	UPDATE high_water_mark
-	SET current_high_ts = (SELECT MAX(update_ts) FROM dwg_fact_weather_observations_tmp)
-	WHERE table_id = 'mrr_fact_weather_observations' AND
-		(SELECT MAX(update_ts) FROM dwg_fact_weather_observations_tmp) IS NOT NULL;
+	SET current_high_ts = (SELECT MAX(update_ts) FROM dwh_fact_weather_observations_tmp)
+	WHERE table_id = 'mrr_fact_weather_observations' AND 
+        (SELECT MAX(update_ts) FROM dwh_fact_weather_observations_tmp) IS NOT NULL;
 
 	-- truncate temporary observation table
-	TRUNCATE TABLE dwh_fact_raw_observations_tmp;
-	TRUNCATE TABLE dwg_fact_weather_observations_tmp;
+    TRUNCATE TABLE dwh_dim_checklist_tmp;
+    TRUNCATE TABLE dwh_dim_location_tmp;
+    TRUNCATE TABLE dwh_fact_observation_tmp;
+    TRUNCATE TABLE dwh_fact_weather_observations_tmp;
 		
 END;
 $BODY$;
