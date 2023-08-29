@@ -14,10 +14,4 @@ else
 	export PGPASSWORD=$4
 	pg_restore --host=$1 --port=$2 --username=$3 --clean --if-exists --create -d postgres $5/mrr_backup.tar
 	echo "MRR db restored from backup."
-	pg_restore --host=$1 --port=$2 --username=$3 --clean --if-exists --create -d postgres $5/stg_backup.tar
-	echo "STG db restored from backup."
-	pg_restore --host=$1 --port=$2 --username=$3 --clean --if-exists --create -d postgres $5/dwh_backup.tar
-	echo "DWH db restored from backup."
-	echo
-	echo "MRR, STG and DWH databases configured."
 fi

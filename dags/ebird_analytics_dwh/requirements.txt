@@ -3,3 +3,5 @@ findspark
 pyspark
 requests
 apache-airflow-providers-postgres
+google-cloud-bigquery
+google-cloud-storage

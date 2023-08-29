@@ -129,8 +129,8 @@ ingest_observations_proc = """
 # Load weather conditions for all locations of new observations
 get_weather_sql = """
     SELECT DISTINCT o.locid, l.lat, l.lon, CAST(o.obsdt AS DATE) obsdt
-    FROM dwh_fact_observation o
-    JOIN dwh_dim_location l
+    FROM `fiery-rarity-396614.ds_ebird_dwh.dwh_fact_observation` o
+    JOIN `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_location` l
     ON o.locid = l.locid
     WHERE o.tavg IS NULL
     ORDER BY o.locid, CAST(o.obsdt AS DATE)
@@ -144,12 +144,13 @@ insert_weather_observations_sql = """
 """
 
 # -------------------------------------------
-# Queries for STG DB
+# Queries for Staging area in Google Cloud Storage
 # -------------------------------------------
 # Export actual MRR public locations dictionary to CSV files
 mrr_dict_locations_to_csv_sql = """
     SELECT l.locid locid, l.locname locname, c.countryname countryname, s.subnationalname subregionname, 
-            l.lat lat, l.lon lon, l.latestobsdt latestobsdt, l.numspeciesalltime numspeciesalltime
+            l.lat lat, l.lon lon, CAST(l.numspeciesalltime AS INT) numspeciesalltime,
+			l.latestobsdt latestobsdt
     FROM mrr_fact_hotspots l
     JOIN mrr_fact_countries c
     ON l.countrycode = c.countrycode
@@ -159,57 +160,23 @@ mrr_dict_locations_to_csv_sql = """
 # Export actual MRR taxonomy dictionary to CSV files
 mrr_dict_taxonomy_to_csv_sql = """
     SELECT t.speciesCode speciesCode, t.sciName sciName, t.comName comName, t.category category,
-            t.orderSciName orderSciName, NULL AS orderComName, t.familyCode familyCode, NULL AS familyComName,
-            t.familySciName familySciName
+            t.orderSciName orderSciName, o.orderComName AS orderComName, t.familyCode familyCode,
+			f.familyComName AS familyComName, t.familySciName familySciName
     FROM mrr_fact_taxonomy t
+    LEFT JOIN mrr_fact_order_comnames o
+    ON t.orderSciName = o.orderSciName AND o.orderLocale = '{0}'
+    LEFT JOIN mrr_fact_family_comnames f
+    ON t.familyCode = f.familyCode AND f.familyLocale = '{0}'
 """
-
-# Store exported dictionaries into STG db
-# - Clear STG dictionaries tables from old data
-# - Load full new update from exported CSV (not incremental) 
-# - and add common names of birds for selected locale
-# As sequence of SQL queries in single transaction
-import_dict_from_csv_to_stg_sql = """
-    BEGIN;
-
-    TRUNCATE TABLE stg_fact_hotspots;
-    TRUNCATE TABLE stg_fact_taxonomy;
-        
-    COPY stg_fact_hotspots
-    FROM '{0}/stg_hotspots.csv'
-    DELIMITER ','
-    CSV HEADER;
-
-    COPY stg_fact_taxonomy
-    FROM '{0}/stg_taxonomy.csv'
-    DELIMITER ','
-    CSV HEADER;
-
-    UPDATE stg_fact_taxonomy
-    SET orderComName = stg_fact_order_comnames.orderComName,
-        familyComName = stg_fact_family_comnames.familyComName
-    FROM stg_fact_order_comnames, stg_fact_family_comnames
-    WHERE stg_fact_taxonomy.orderSciName = stg_fact_order_comnames.orderSciName
-            AND stg_fact_order_comnames.orderLocale = '{1}'
-            AND stg_fact_taxonomy.familyCode = stg_fact_family_comnames.familyCode
-            AND stg_fact_family_comnames.familyLocale = '{1}';
-
-    COMMIT;
-"""
-# As stored procedure (single transaction)
-import_dict_from_csv_to_stg_proc = """
-    CALL stg_process_dictionaries('{0}', 'stg_hotspots.csv', 'stg_taxonomy.csv', '{1}')
-"""
-
 # Export trusted new data rows for observations from MRR db to CSV files (incremental using high water mark)
 mrr_fact_locations_to_csv_sql = """
-    SELECT locid, countryname, subnational1name, ishotspot, locname, lat, lng, hierarchicalname, obsfulldt
+    SELECT locid, locname, lat, lng, countryname, subnational1name, obsfulldt, NULL
     FROM mrr_fact_location
     WHERE obsFullDt > '{}'
 """
 mrr_fact_checklists_to_csv_sql = """
-    SELECT *
-    FROM mrr_fact_checklist
+    SELECT c.locid, c.subid, c.userdisplayname, c.numspecies, c.obsfulldt
+    FROM mrr_fact_checklist c
     WHERE obsFullDt > '{}'
 """
 mrr_fact_observations_to_csv_sql = """
@@ -219,87 +186,15 @@ mrr_fact_observations_to_csv_sql = """
 """
 # Export new weather observation for updated locations (incremental using high water mark)
 mrr_weather_to_csv_sql = """
-    SELECT *
-    FROM mrr_fact_weather_observations
+    SELECT w.loc_id, w.obsdt, w.tavg, w.tmin, w.tmax, w.prcp, w.snow, w.wdir,
+		w.wspd, w.wpgt, w.pres, w.tsun, w.update_ts
+    FROM mrr_fact_weather_observations w
     WHERE update_ts > '{}'
-"""
-
-# Store exported CSV into STG db
-# - Clear STG observations table from old data
-# - Store clean date to STG (redy to model DWH)
-# As sequence of SQL queries in single transaction
-import_observation_from_csv_to_stg_sql = """
-    BEGIN;
-
-    TRUNCATE TABLE stg_fact_location;
-    TRUNCATE TABLE stg_fact_checklist;
-    TRUNCATE TABLE stg_fact_observation;
-    TRUNCATE TABLE stg_fact_weather_observations;
-
-    COPY stg_fact_location
-    FROM '{0}/stg_location.csv'
-    DELIMITER ','
-    CSV HEADER;
-
-    COPY stg_fact_checklist
-    FROM '{0}/stg_checklist.csv'
-    DELIMITER ','
-    CSV HEADER;
-    
-    COPY stg_fact_observation
-    FROM '{0}/stg_observation.csv'
-    DELIMITER ','
-    CSV HEADER;
-
-    COPY stg_fact_weather_observations
-    FROM '{0}/stg_weather.csv'
-    DELIMITER ','
-    CSV HEADER;
-
-    COMMIT;
-"""
-# As stored procedure (single transaction)
-import_observation_from_csv_to_stg_proc = """
-    CALL stg_process_observations('{0}', 'stg_location.csv', 'stg_checklist.csv',
-                                    'stg_observation.csv', 'stg_weather.csv')
 """
 
 # -------------------------------------------
 # Queries for DWH DB
 # -------------------------------------------
-# Export data accumulated in staging area (STG db) into CSV files
-# Export new observation accumulated from previous high water mark ts
-stg_location_to_csv_sql = """
-    SELECT locId, locName, lat, lng, countryName, subnational1Name, obsFullDt, NULL
-    FROM stg_fact_location
-    WHERE obsFullDt > '{}'
-"""
-stg_checklist_to_csv_sql = """
-    SELECT locId, subId, userDisplayName, numSpecies, obsFullDt
-    FROM stg_fact_checklist
-    WHERE obsFullDt > '{}'
-"""
-stg_observation_to_csv_sql = """
-    SELECT speciescode, obsdt, subid, obsid, howmany
-    FROM stg_fact_observation
-    WHERE obsdt > '{}'
-"""
-# Export actual bird taxonomy dictionary
-stg_dict_taxonomy_to_csv_sql = """
-    SELECT * FROM stg_fact_taxonomy
-"""
-# Export actual public locations dictionary
-stg_dict_location_to_csv_sql = """
-    SELECT l.locid, l.locname, l.countryname, l.subRegionName, 
-            l.lat, l.lon, l.latestObsDt, l.numSpeciesAllTime
-    FROM stg_fact_hotspots l
-"""
-# Export actual weather observations accumulated from previous high water mark ts
-stg_weather_to_csv_sql = """
-    SELECT *
-    FROM stg_fact_weather_observations
-"""
-
 # Create actual data model - fact and dimension table for Star Schema
     
 # Import csv files with new data sets from staging area:
@@ -315,113 +210,240 @@ stg_weather_to_csv_sql = """
 # - Truncate temporary observation table after successful model's update
 # - Update current high_water_mark on success of current DAG
 
+# Import new batch of data into temporary dataset
+dwh_load_taxonomy_dict_bq_sql = """
+    LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_species_details_tmp`
+    (speciesCode STRING, sciName STRING, comName STRING, category STRING, orderSciName STRING,
+    orderComName STRING, familyCode STRING, familyComName STRING, familySciName STRING)
+    OPTIONS(
+        expiration_timestamp="{}"
+    )
+    FROM FILES(
+        FORMAT='CSV',
+        uris = ['gs://fiery-rarity-396614-ebird/stg_taxonomy.csv'],
+        skip_leading_rows=1
+    );
+"""
+dwh_load_hotspots_dict_bq_sql = """
+    LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_location_details_tmp`
+    (locid STRING, locname STRING, countryname STRING, subregionname STRING,
+    lat FLOAT64, lon FLOAT64, numspeciesalltime INTEGER, latestobsdt DATETIME)
+    OPTIONS(
+        expiration_timestamp="{}"
+    )
+    FROM FILES(
+        FORMAT='CSV',
+        uris = ['gs://fiery-rarity-396614-ebird/stg_hotspots.csv'],
+        skip_leading_rows=1
+    );
+"""
+dwh_load_location_dict_bq_sql = """
+    LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_location_tmp`
+    (locid STRING, locname STRING, lat FLOAT64, lon FLOAT64, countryname STRING,
+     subregionname STRING, latestobsdt DATETIME, numspeciesalltime INTEGER)
+    OPTIONS(
+        expiration_timestamp="{}"
+    )
+    FROM FILES(
+        FORMAT='CSV',
+        uris = ['gs://fiery-rarity-396614-ebird/stg_location.csv'],
+        skip_leading_rows=1
+    );
+"""
+
+dwh_load_checklist_dict_bq_sql = """
+    LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_checklist_tmp`
+    (locid STRING, subid STRING, userdisplayname STRING,
+     numspecies INTEGER, obsfulldt DATETIME)
+    OPTIONS(
+        expiration_timestamp="{}"
+    )
+    FROM FILES(
+        FORMAT='CSV',
+        uris = ['gs://fiery-rarity-396614-ebird/stg_checklist.csv'],
+        skip_leading_rows=1
+    );
+"""
+
+dwh_load_observation_bq_sql = """
+    LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_observation_tmp`
+    (speciescode STRING, obsdt DATETIME, subid STRING,
+     obsid STRING, howmany INTEGER)
+    OPTIONS(
+        expiration_timestamp="{}"
+    )
+    FROM FILES(
+        FORMAT='CSV',
+        uris = ['gs://fiery-rarity-396614-ebird/stg_observation.csv'],
+        skip_leading_rows=1
+    );
+"""
+dwh_load_weather_bq_sql = """
+    LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_weather_observations_tmp`
+    (loc_id STRING, obsdt DATETIME, tavg FLOAT64, tmin FLOAT64, tmax FLOAT64, prcp FLOAT64,
+     snow FLOAT64, wdir FLOAT64, wspd FLOAT64, wpgt FLOAT64, pres FLOAT64, tsun FLOAT64,
+     update_ts DATETIME)
+    OPTIONS(
+        expiration_timestamp="{}"
+    )
+    FROM FILES(
+        FORMAT='CSV',
+        uris = ['gs://fiery-rarity-396614-ebird/stg_weather.csv'],
+        skip_leading_rows=1
+    );
+"""
+
 # As sequence of SQL queries in single transaction
-dwh_update_model_sql = """
-    BEGIN;
+dwh_update_bq_sql = """
+    BEGIN TRANSACTION;
 
-    COPY dwh_dim_location_tmp
-    FROM '{0}/dwh_location.csv'
-    DELIMITER ','
-    CSV HEADER;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_location_details` T
+    USING `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_location_details_tmp` S
+    ON T.locid = S.locid
+    WHEN MATCHED THEN
+        UPDATE SET locname = S.locname, countryname = S.countryname,
+                    subregionname = S.subregionname, lat = S.lat, lon = S.lon,
+                    numspeciesalltime = S.numspeciesalltime, latestobsdt = S.latestobsdt
+    WHEN NOT MATCHED THEN
+        INSERT (locid, locname, countryname, subregionname, lat, lon, 
+                numspeciesalltime, latestobsdt)
+        VALUES(locid, locname, countryname, subregionname, lat, lon, 
+                numspeciesalltime, latestobsdt);
 
-    COPY dwh_dim_checklist_tmp
-    FROM '{0}/dwh_checklist.csv'
-    DELIMITER ','
-    CSV HEADER;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_species_details` T
+    USING `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_species_details_tmp` S
+    ON T.speciescode = S.speciescode
+    WHEN MATCHED THEN
+        UPDATE SET sciname = S.sciname, comname = S.comname, category = S.category,
+                    ordersciname = S.ordersciname, ordercomname = S.ordercomname,
+                    familycode = S.familycode, familycomname = S.familycomname,
+                    familysciname = S.familysciname
+    WHEN NOT MATCHED THEN
+        INSERT (speciescode, sciname, comname, category, ordersciname, ordercomname, 
+                familycode, familycomname, familysciname)
+        VALUES(speciescode, sciname, comname, category, ordersciname, ordercomname, 
+                familycode, familycomname, familysciname); 
 
-    COPY dwh_fact_observation_tmp
-    FROM '{0}/dwh_observation.csv'
-    DELIMITER ','
-    CSV HEADER;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_dt` T
+    USING (
+        SELECT DISTINCT obsdt, extract(day from obsdt) day, extract(month from obsdt) month,
+                FORMAT_DATETIME("%B",obsdt) month_name, extract(year from obsdt) year, 
+                extract(quarter from obsdt) quarter
+        FROM `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_observation_tmp`
+    ) S
+    ON T.obsdt = S.obsdt
+    WHEN NOT MATCHED THEN
+        INSERT (obsdt, day, month, month_name, year, quarter)
+        VALUES (obsdt, day, month, month_name, year, quarter);
 
-    COPY dwh_fact_weather_observations_tmp
-    FROM '{0}/dwh_weather.csv'
-    DELIMITER ','
-    CSV HEADER;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_location` T
+    USING (
+        SELECT DISTINCT l.locid locid, l.locname locname, l.lat lat, l.lon lon,
+                    l.countryname countryname, l.subregionname subregionname,
+                    l.latestobsdt latestobsdt, d.numspeciesalltime numspeciesalltime
+        FROM `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_location_tmp` l
+        LEFT JOIN `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_location_details` d
+        ON l.locid = d.locid
+    ) S
+    ON T.locid = S.locid
+    WHEN MATCHED THEN
+        UPDATE SET locname = S.locname, lat = S.lat, lon = S.lon,
+                    countryname = S.countryname, subregionname = S.subregionname,
+                    latestobsdt = S.latestobsdt, numspeciesalltime = S.numspeciesalltime
+    WHEN NOT MATCHED THEN
+        INSERT (locid, locname, lat, lon, countryname, subregionname, 
+                latestobsdt, numspeciesalltime)
+        VALUES (locid, locname, lat, lon, countryname, subregionname, 
+                latestobsdt, numspeciesalltime);
 
-    TRUNCATE TABLE dwh_dim_species_details;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_checklist` T
+    USING `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_checklist_tmp` S
+    ON T.subid = S.subid
+    WHEN MATCHED THEN
+        UPDATE SET locid = S.locid, userdisplayname = S.userdisplayname,
+                    numspecies = S.numspecies, obsfulldt = S.obsfulldt
+    WHEN NOT MATCHED THEN
+        INSERT (locid, subid, userdisplayname, numspecies, obsfulldt)
+        VALUES (locid, subid, userdisplayname, numspecies, obsfulldt);
 
-    COPY dwh_dim_species_details
-    FROM '{0}/dwh_taxonomy.csv'
-    DELIMITER ','
-    CSV HEADER;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_fact_observation` T
+    USING (
+        SELECT o.subid subid, o.speciescode speciescode, c.locId locId, 
+                o.obsdt obsdt, o.howmany howmany
+        FROM `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_observation_tmp` o
+        LEFT JOIN `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_checklist` c
+        ON o.subid = c.subid
+    ) S
+    ON T.subId = S.subId AND T.speciescode = S.speciescode
+    WHEN MATCHED THEN
+        UPDATE SET locid = S.locid, obsdt = S.obsdt, howmany = S.howmany
+    WHEN NOT MATCHED THEN
+        INSERT (subId, speciescode, locid, obsdt, howmany)
+        VALUES (subId, speciescode, locid, obsdt, howmany);
 
-    TRUNCATE TABLE dwh_dim_location_details;
-
-    COPY dwh_dim_location_details
-    FROM '{0}/dwh_hotspots.csv'
-    DELIMITER ','
-    CSV HEADER;
-    
-    INSERT INTO dwh_dim_location
-    SELECT DISTINCT l.locid, l.locname, l.lat, l.lon, l.countryname, l.subregionname,
-                    l.latestobsdt, d.numspeciesalltime
-    FROM dwh_dim_location_tmp l
-    LEFT JOIN dwh_dim_location_details d
-    ON l.locid = d.locid
-    ON CONFLICT (locid) DO UPDATE
-    SET locname = EXCLUDED.locname, lat = EXCLUDED.lat, lon = EXCLUDED.lon,
-        countryname = EXCLUDED.countryname, subRegionName = EXCLUDED.subRegionName,
-        latestObsDt = EXCLUDED.latestObsDt, numSpeciesAllTime = EXCLUDED.numSpeciesAllTime;
-
-    INSERT INTO dwh_dim_dt
-    SELECT DISTINCT obsdt, extract(day from obsdt), extract(month from obsdt),
-                    TO_CHAR(obsdt, 'Month'), extract(year from obsdt), extract(quarter from obsdt)
-    FROM dwh_fact_observation_tmp
-    ON CONFLICT (obsdt) DO NOTHING;
-
-    INSERT INTO dwh_dim_checklist
-    SELECT DISTINCT c.locId, c.subId, c.userDisplayName, c.numSpecies, c.obsFullDt
-    FROM dwh_dim_checklist_tmp c
-    ON CONFLICT (subId) DO UPDATE
-    SET locId = EXCLUDED.locId, userDisplayName = EXCLUDED.userDisplayName,
-        numSpecies = EXCLUDED.numSpecies, obsFullDt = EXCLUDED.obsFullDt;
-
-    INSERT INTO dwh_fact_observation
-    SELECT o.subid, o.speciescode, c.locId, o.obsdt, o.howmany
-    FROM dwh_fact_observation_tmp o
-    LEFT JOIN dwh_dim_checklist c
-    ON o.subid = c.subid
-    ON CONFLICT (subId, speciescode) DO UPDATE
-    SET locId = EXCLUDED.locId, obsdt = EXCLUDED.obsdt, howmany = EXCLUDED.howmany;
-
-    UPDATE dwh_fact_observation o
+    UPDATE `fiery-rarity-396614.ds_ebird_dwh.dwh_fact_observation` o
     SET tavg = w.tavg, tmin = w.tmin, tmax = w.tmax, prcp = w.prcp,
         snow = w.snow, wdir = w.wdir, wspd = w.wspd, wpgt = w.wpgt, 
         pres = w.pres, tsun = w.tsun
-    FROM dwh_fact_weather_observations_tmp w
+    FROM `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_weather_observations_tmp` w
     WHERE o.locid = w.loc_id AND CAST(o.obsdt AS DATE) = w.obsdt;
 
-    TRUNCATE TABLE dwh_dim_species;
+    MERGE `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_species` T
+    USING (
+        SELECT DISTINCT o.speciescode speciescode, d.sciName sciName, d.comName comName,
+                        d.category category, d.orderSciName orderSciName,
+                        d.orderComName orderComName, d.familyCode familyCode,
+                        d.familyComName familyComName, d.familySciName familySciName
+        FROM `fiery-rarity-396614.ds_ebird_dwh.dwh_fact_observation` o
+        LEFT JOIN `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_species_details` d
+        ON o.speciescode = d.speciescode
+    ) S
+    ON T.speciescode = S.speciescode
+    WHEN MATCHED THEN
+        UPDATE SET sciName = S.sciName, comName = S.comName, category = S.category,
+                    orderSciName = S.orderSciName, orderComName = S.orderComName,
+                    familyCode = S.familyCode, familyComName = S.familyComName,
+                    familySciName = S.familySciName
+    WHEN NOT MATCHED THEN
+        INSERT (speciescode, sciName, comName, category, orderSciName, orderComName,
+                familyCode, familyComName, familySciName)
+        VALUES (speciescode, sciName, comName, category, orderSciName, orderComName,
+                familyCode, familyComName, familySciName);
 
-    INSERT INTO dwh_dim_species
-    SELECT DISTINCT o.speciescode, d.sciName, d.comName, d.category, d.orderSciName, d.orderComName,
-                    d.familyCode, d.familyComName, d.familySciName
-    FROM dwh_fact_observation o
-    LEFT JOIN dwh_dim_species_details d
-    ON o.speciescode = d.speciescode;
+    UPDATE `fiery-rarity-396614.ds_ebird_dwh.high_water_mark`
+    SET current_high_ts = (SELECT MAX(obsdt)
+                           FROM `fiery-rarity-396614.ds_ebird_dwh.dwh_fact_observation`)
+    WHERE table_id = 'dwh_fact_observation' AND
+            (SELECT MAX(obsdt)
+             FROM `fiery-rarity-396614.ds_ebird_dwh.dwh_fact_observation`) IS NOT NULL;
 
-	UPDATE high_water_mark
-	SET current_high_ts = (SELECT MAX(obsdt) FROM dwh_fact_observation)
-	WHERE table_id = 'dwh_fact_observation';
-
-	UPDATE high_water_mark
-	SET current_high_ts = (SELECT MAX(update_ts) FROM dwh_fact_weather_observations_tmp)
-	WHERE table_id = 'mrr_fact_weather_observations' AND 
-        (SELECT MAX(update_ts) FROM dwh_fact_weather_observations_tmp) IS NOT NULL;
-
-    TRUNCATE TABLE dwh_dim_checklist_tmp;
-    TRUNCATE TABLE dwh_dim_location_tmp;
-    TRUNCATE TABLE dwh_fact_observation_tmp;
-    TRUNCATE TABLE dwh_fact_weather_observations_tmp;
-                      
-    COMMIT;
+    UPDATE `fiery-rarity-396614.ds_ebird_dwh.high_water_mark`
+    SET current_high_ts = (SELECT MAX(update_ts)
+                           FROM `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_weather_observations_tmp`)
+    WHERE table_id = 'mrr_fact_weather_observations' AND
+            (SELECT MAX(update_ts)
+             FROM `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_weather_observations_tmp`) IS NOT NULL;
+                
+    COMMIT TRANSACTION;
 """
+
 # As stored procedure (single transaction)
 dwh_update_model_proc = """
-    CALL dwh_process_observations('{0}', 'dwh_location.csv', 'dwh_checklist.csv', 
-                                    'dwh_observation.csv', 'dwh_hotspots.csv', 
-                                    'dwh_taxonomy.csv', 'dwh_weather.csv')
+    CALL ds_ebird_dwh.dwh_process_observations("{0}");
+"""
+
+
+# -------------------------------------------
+# Helper queries
+# -------------------------------------------
+# Insert msg into service log
+log_insert = """
+    INSERT INTO `fiery-rarity-396614.ds_ebird_dwh.etl_log` (ts, event_type, event_description) VALUES ('{}', {}, '{}')
+"""
+get_hwm = """
+    SELECT CAST(current_high_ts AS DATETIME)
+    FROM `fiery-rarity-396614.ds_ebird_dwh.high_water_mark`
+    WHERE table_id = '{}'
 """
 
 

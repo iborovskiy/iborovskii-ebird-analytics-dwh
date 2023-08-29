@@ -2,12 +2,18 @@
 import pandas as pd
 import numpy as np
 import os
+import datetime
 
 # DAG imports
 # DAG access connectors imports
 from airflow.hooks.postgres_hook import PostgresHook
 # DAG utils imports
 from airflow.models import Variable
+
+# Google Cloud Connectors
+from google.cloud import bigquery
+from google.cloud import storage
+from google.oauth2 import service_account
 
 # Local modules imports
 import ebird_analytics_dwh.etl_logging as etl_log
@@ -17,52 +23,20 @@ import ebird_analytics_dwh.configs as sq
 def load_dwh_from_stg(*args, **kwargs):
     # Get DAG variables values
     DWH_INTERNAL_MODEL = False if Variable.get("EBIRD_DWH_INTERNAL_MODEL", 
-                        default_var='false').lower() == 'false' else True   # Model creation mode
+                        default_var='false').lower() == 'false' else True       # Model creation mode
     home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')              # Temporary working directory
+    key_path = Variable.get("EBIRD_BIGQUERY_KEY_PATH", default_var='/tmp/')     # Path to the service account key file
     # Get cursors to DBs
-    pgs_stg_hook = PostgresHook(postgres_conn_id="postgres_stg_conn")
-    pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
+    credentials = service_account.Credentials.from_service_account_file(
+        key_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+    client = bigquery.Client(credentials=credentials, project=credentials.project_id,)
+    storage_client = storage.Client(credentials=credentials, project=credentials.project_id,)
+    bucket = storage_client.get_bucket('fiery-rarity-396614-ebird')
 
     # Load current high_water_mark
     high_water_mark = etl_log.load_high_water_mark()
     print(f"high_water_mark = {high_water_mark}")
-
-
-    # Export data accumulated in staging area (STG db) into CSV files
-        
-    # Export new observations accumulated from previous high water mark ts
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_location_to_csv_sql.format(high_water_mark)),
-                                    columns = ['locid', 'locname', 'lat', 'lon',
-                                    'countryname', 'subregionname', 'latestobsdt', 'numspeciesalltime'])
-    stg_new_frame.to_csv(home_dir + '/dwh_location.csv', index = False)
-    
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_checklist_to_csv_sql.format(high_water_mark)),
-                                    columns = ['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsFullDt'])
-    stg_new_frame.to_csv(home_dir + '/dwh_checklist.csv', index = False)
-
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_observation_to_csv_sql.format(high_water_mark)),
-                                    columns = ['speciescode', 'obsdt', 'subid', 'obsid', 'howmany'])
-    stg_new_frame.to_csv(home_dir + '/dwh_observation.csv', index = False)
-    print('Importing', len(stg_new_frame), 'new observations.')
-
-    # Export actual bird taxonomy dictionary
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_dict_taxonomy_to_csv_sql),
-                                    columns = ['speciesCode', 'sciName', 'comName', 
-                                                'category', 'orderSciName', 'orderComName', 
-                                                'familyCode', 'familyComName', 'familySciName'])
-    stg_new_frame.to_csv(home_dir + '/dwh_taxonomy.csv', index = False)
-
-    # Export actual public locations dictionary
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_dict_location_to_csv_sql),
-                                    columns = ['locId', 'locName', 'countryName', 
-                                                'subRegionName', 'lat', 'lon', 'latestObsDt', 'numSpeciesAllTime'])
-    stg_new_frame.to_csv(home_dir + '/dwh_hotspots.csv', index = False)
-
-    # Export actual weather observations accumulated from previous high water mark ts
-    stg_new_frame = pd.DataFrame(pgs_stg_hook.get_records(sq.stg_weather_to_csv_sql),
-                                    columns = ['loc_id', 'obsdt', 'tavg', 'tmin', 'tmax', 'prcp', 'snow', 
-                                               'wdir', 'wspd', 'wpgt', 'pres', 'tsun', 'update_ts'])
-    stg_new_frame.to_csv(home_dir + '/dwh_weather.csv', index = False)
 
 
     # Create actual data model - fact and dimension table for Star Schema
@@ -83,23 +57,38 @@ def load_dwh_from_stg(*args, **kwargs):
     if DWH_INTERNAL_MODEL == False:
         # Use several SQL queries in single transaction
         print("Use external load mode of STG")
-        sql_q = sq.dwh_update_model_sql.format(home_dir)
+        exp_time = (datetime.datetime.now() + datetime.timedelta(minutes = 2)).astimezone() # Temp tables expiration (10 min)
+
+        # Import new batch of data into temporary dataset
+        query_job = client.query(sq.dwh_load_taxonomy_dict_bq_sql.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
+        query_job = client.query(sq.dwh_load_hotspots_dict_bq_sql.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
+        query_job = client.query(sq.dwh_load_location_dict_bq_sql.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
+        query_job = client.query(sq.dwh_load_checklist_dict_bq_sql.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
+        query_job = client.query(sq.dwh_load_observation_bq_sql.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
+        query_job = client.query(sq.dwh_load_weather_bq_sql.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
+        query_job = client.query(sq.dwh_update_bq_sql) # BigQuery API request
+        query_job.result()  # Waits for query to finish
     else:
         # Use stored procedure from DWH db (single transaction)
         print("Use internal load mode of DWH")
-        sql_q = sq.dwh_update_model_proc.format(home_dir)
-    pgs_dwh_hook.run(sql_q)
+        query_job = client.query(sq.dwh_update_model_proc.format(exp_time)) # BigQuery API request
+        query_job.result()  # Waits for query to finish
+
 
     print('All fact and dimension tables of DWH are updated.')
 
-    # Remove temporary csv files
-    os.remove(home_dir + '/dwh_taxonomy.csv')
-    os.remove(home_dir + '/dwh_hotspots.csv')
-    os.remove(home_dir + '/dwh_location.csv')
-    os.remove(home_dir + '/dwh_checklist.csv')
-    os.remove(home_dir + '/dwh_observation.csv')
-    os.remove(home_dir + '/dwh_weather.csv')
-
     # Close the connection to STG and MRR db
-    pgs_stg_hook.conn.close()
-    pgs_dwh_hook.conn.close()
+    client.close()
+    storage_client.close()

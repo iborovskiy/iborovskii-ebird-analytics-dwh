@@ -43,7 +43,7 @@ dag = DAG(
     default_args=default_args,
     description='Analytics DWH for the eBird observations',
     schedule_interval=timedelta(hours=6),
-    catchup=True,
+    catchup=False,
     on_failure_callback = etl_log.on_DAG_error_alert,
 )
 
@@ -55,47 +55,50 @@ def etl_cfg_task(*args, **kwargs):
     # Read config file on every DAG start and update connections and environments
     config = configparser.ConfigParser()
     config.read(dag.folder + '/ebird_analytics_dwh.cfg')
+    
     # Update db connections
-    db_list = [('MRR_DB_INSTANCE', 'postgres_mrr_conn'),
-                ('STG_DB_INSTANCE', 'postgres_stg_conn'),
-                ('DWH_DB_INSTANCE', 'postgres_dwh_conn')]
-    for i, db in enumerate(db_list):
-        host = config.get(db[0], 'DB_HOST')
-        login = config.get(db[0], 'DB_USER')
-        password = config.get(db[0], 'DB_PASSWORD')
-        port = config.get(db[0], 'DB_PORT')
-        schema = config.get(db[0], 'DB_NAME')
-        conn = Connection(
-            conn_id=db[1],
+    host = config.get('MRR_DB_INSTANCE', 'DB_HOST')
+    login = config.get('MRR_DB_INSTANCE', 'DB_USER')
+    password = config.get('MRR_DB_INSTANCE', 'DB_PASSWORD')
+    port = config.get('MRR_DB_INSTANCE', 'DB_PORT')
+    schema = config.get('MRR_DB_INSTANCE', 'DB_NAME')
+    conn = Connection(
+            conn_id='postgres_mrr_conn',
             conn_type='postgres',
             host=host,
             login=login,
             password=password,
             port=port,
             schema=schema
-        )
-        session = settings.Session()
-        try:
-            old_conn = (session.query(Connection).filter(Connection.conn_id == db[1]).one())
-            session.delete(old_conn)
-            session.commit()
-            print(f'Old connection {db[1]} deleted.')
-        except exc.NoResultFound:
+    )
+    session = settings.Session()
+    try:
+        old_conn = (session.query(Connection).filter(Connection.conn_id == 'postgres_mrr_conn').one())
+        session.delete(old_conn)
+        session.commit()
+        print(f'Old connection "postgres_mrr_conn" deleted.')
+    except exc.NoResultFound:
             print(f'Create connection for the first time.')
-        finally:
-            session.add(conn)
-            session.commit()
+    finally:
+        session.add(conn)
+        session.commit()
         
-        # Use common credentials for all backups (To change in future)
-        if i == 2:
-            Variable.set(key="EBIRD_DB_COMMON_HOST", value=host)
-            Variable.set(key="EBIRD_DB_COMMON_PORT", value=port)
-            Variable.set(key="EBIRD_DB_COMMON_USERNAME", value=login)
-            Variable.set(key="EBIRD_DB_COMMON_PASSWORD", value=password)
+    # Use common credentials for all backups (To change in future)
+    Variable.set(key="EBIRD_DB_COMMON_HOST", value=host)
+    Variable.set(key="EBIRD_DB_COMMON_PORT", value=port)
+    Variable.set(key="EBIRD_DB_COMMON_USERNAME", value=login)
+    Variable.set(key="EBIRD_DB_COMMON_PASSWORD", value=password)
 
-        print(f'Connection {db[1]} created.')
+    print(f'Connection "postgres_mrr_conn" created.')
     
     # Update variables
+    # Google Cloud connection variables
+    try:
+        val = config.get('DWH_DB_INSTANCE', 'EBIRD_BIGQUERY_KEY_PATH')
+    except:
+        val = ''
+    Variable.set(key="EBIRD_BIGQUERY_KEY_PATH", value=val)
+
     # Model parameters
     try:
         val = config.get('MODEL', 'EBIRD_DWH_INTERNAL_MODEL')

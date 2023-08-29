@@ -18,6 +18,10 @@ from airflow.hooks.postgres_hook import PostgresHook
 # DAG utils imports
 from airflow.models import Variable
 
+# Google Cloud Connectors
+from google.cloud import bigquery
+from google.oauth2 import service_account
+
 # Local modules imports
 import ebird_analytics_dwh.etl_logging as etl_log
 import ebird_analytics_dwh.configs as sq
@@ -98,8 +102,13 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     DWH_INTERNAL_MODEL = False if Variable.get("EBIRD_DWH_INTERNAL_MODEL", 
                 default_var='false').lower() == 'false' else True               # Model creation mode
     api_key = Variable.get("EBIRD_API_KEY", default_var=None)                   # API Key
+    key_path = Variable.get("EBIRD_BIGQUERY_KEY_PATH", default_var='/tmp/')     # Path to the service account key file
     meteostat_api_key = Variable.get("EBIRD_WEATHER_API_KEY", default_var=None) # Weather API Key
     home_dir = Variable.get("EBIRD_HOME_DIR", default_var='/tmp/')              # Temporary working directory
+    credentials = service_account.Credentials.from_service_account_file(
+        key_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+    client = bigquery.Client(credentials=credentials, project=credentials.project_id,)
     
     # Load current high_water_mark
     high_water_mark = etl_log.load_high_water_mark()
@@ -122,9 +131,10 @@ def ingest_new_rows_from_csv(*args, **kwargs):
         
         # Load results from JSON to pandas df
         df = pd.DataFrame(r.json())
-        # Combine all results in shared dateframes - one for locations and one for observations
-        loc_df = pd.concat([loc_df, df['loc'].apply(pd.Series)])
-        obs_df = pd.concat([obs_df, df[['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsDt', 'obsTime', 'subID']]])
+        if len(df) > 0:
+            # Combine all results in shared dateframes - one for locations and one for observations
+            loc_df = pd.concat([loc_df, df['loc'].apply(pd.Series)])
+            obs_df = pd.concat([obs_df, df[['locId', 'subId', 'userDisplayName', 'numSpecies', 'obsDt', 'obsTime', 'subID']]])
 
     
     if USE_SPARK:
@@ -213,8 +223,9 @@ def ingest_new_rows_from_csv(*args, **kwargs):
     weather_high_water_mark = etl_log.load_high_water_mark('mrr_fact_weather_observations')
     if datetime.datetime.now() - weather_high_water_mark > datetime.timedelta(days=31):
         print('Time to update weather')
-        pgs_dwh_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-        new_weather_rows = pgs_dwh_hook.get_records(sq.get_weather_sql.format(high_water_mark))
+        query_job = client.query(sq.get_weather_sql) # BigQuery API request
+        new_weather_rows = query_job.result()  # Waits for query to finish
+
         cur_loc_id = None
         loc_no_data = False
         for row in new_weather_rows:
@@ -240,12 +251,12 @@ def ingest_new_rows_from_csv(*args, **kwargs):
                 cur_loc_id = row[0]
                 loc_no_data = True
         print(f'{len(new_weather_rows)} rows added to weather conditions.')
-        pgs_dwh_hook.conn.close()
     else:
         print(f'Skip weather update. {weather_high_water_mark=}, Current time - {datetime.datetime.now()}.')
 
     # Close the connection to MRR db
     pgs_mrr_hook.conn.close()
+    client.close()
 
     # Make log record on success
     etl_log.log_msg(datetime.datetime.now(), etl_log.INFO_MSG,

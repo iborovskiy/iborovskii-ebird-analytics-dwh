@@ -6,13 +6,34 @@ import datetime
 from airflow import DAG
 # DAG access connectors imports
 from airflow.hooks.postgres_hook import PostgresHook
+# DAG utils imports
+from airflow.models import Variable
+
+# Google Cloud Connectors
+from google.cloud import bigquery
+from google.oauth2 import service_account
+
+# Local modules imports
+import ebird_analytics_dwh.configs as sq
 
 
 # Load current high_water_mark
 def load_high_water_mark(tbl = 'dwh_fact_observation'):
-    pgs_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    high_water_mark = (pgs_hook.get_records(f"SELECT get_current_HWM('{tbl}')"))[0][0]
-    pgs_hook.conn.close()
+    # Get DAG variables values 
+    key_path = Variable.get("EBIRD_BIGQUERY_KEY_PATH", default_var='/tmp/') # Path to the service account key file
+    credentials = service_account.Credentials.from_service_account_file(
+        key_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+    client = bigquery.Client(credentials=credentials, project=credentials.project_id,)
+    query_job = client.query(sq.get_hwm.format(tbl))  # BigQuery API request
+    rows = query_job.result()  # Waits for query to finish
+    if rows.total_rows == 0:
+        high_water_mark = '2023-07-27 00:00:00'
+    else:
+        high_water_mark = next(rows)[0]
+        if high_water_mark is None:
+            high_water_mark = '2023-07-27 00:00:00'
+    client.close()
     return high_water_mark
 
 
@@ -23,10 +44,16 @@ ERROR_MSG = 3
 
 # Helper function for saving message into operational log
 def log_msg(ts, level, msg):
-    pgs_hook = PostgresHook(postgres_conn_id="postgres_dwh_conn")
-    log_insert = 'INSERT INTO etl_log (ts, event_type, event_description) VALUES (%s, %s, %s)'
-    pgs_hook.run(log_insert, parameters = (ts, level, msg))
-    pgs_hook.conn.close()
+    # Get DAG variables values 
+    key_path = Variable.get("EBIRD_BIGQUERY_KEY_PATH", default_var='/tmp/') # Path to the service account key file
+    credentials = service_account.Credentials.from_service_account_file(
+        key_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+    client = bigquery.Client(credentials=credentials, project=credentials.project_id,)
+    query_job = client.query(sq.log_insert.format(ts, level, msg))  # BigQuery API request
+    query_job.result()  # Waits for query to finish
+    client.close()
+
 
 # Logging events
 def on_DAG_start_alert(context):

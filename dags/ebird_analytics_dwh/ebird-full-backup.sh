@@ -5,7 +5,7 @@ then
 	echo "USAGE: ebird-full-backup.sh <host> <port> <username> <password> <dirname>"
 else
 
-	echo Starting full db backup...
+	echo Starting full MRR db backup...
 	echo
 
 	export PGPASSWORD=$4
@@ -17,15 +17,5 @@ else
 
 	pg_dump -h $1 -p $2 -U $3 -F t mrr > $5/mrr_backup.tar
 
-	echo MRR - backup completed.
-
-	pg_dump -h $1 -p $2 -U $3 -F t stg > $5/stg_backup.tar
-
-	echo STG - backup completed.
-
-	pg_dump -h $1 -p $2 -U $3 -F t dwh > $5/dwh_backup.tar
-
-	echo DWH - backup completed.
-	echo 
-	echo Full db backup completed.
+	echo Full MRR db backup completed.
 fi
