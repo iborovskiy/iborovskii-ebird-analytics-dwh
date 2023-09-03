@@ -1,0 +1,8 @@
+{
+    "DWH_INTERNAL_MODEL": false,
+    "api_key": "************",
+    "regionCode": "GE",
+    "days_back": "30",
+    "meteostat_api_key": "**************************************",
+    "locale": "ru"
+}

@@ -133,7 +133,7 @@ get_weather_sql = """
     JOIN `fiery-rarity-396614.ds_ebird_dwh.dwh_dim_location` l
     ON o.locid = l.locid
     WHERE o.tavg IS NULL
-    ORDER BY o.locid, CAST(o.obsdt AS DATE)
+    ORDER BY o.locid, obsdt
 """
 
 # Insert new record in mrr_fact_weather_observations table
@@ -224,6 +224,7 @@ dwh_load_taxonomy_dict_bq_sql = """
         skip_leading_rows=1
     );
 """
+
 dwh_load_hotspots_dict_bq_sql = """
     LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_location_details_tmp`
     (locid STRING, locname STRING, countryname STRING, subregionname STRING,
@@ -237,6 +238,7 @@ dwh_load_hotspots_dict_bq_sql = """
         skip_leading_rows=1
     );
 """
+
 dwh_load_location_dict_bq_sql = """
     LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_dim_location_tmp`
     (locid STRING, locname STRING, lat FLOAT64, lon FLOAT64, countryname STRING,
@@ -278,6 +280,7 @@ dwh_load_observation_bq_sql = """
         skip_leading_rows=1
     );
 """
+
 dwh_load_weather_bq_sql = """
     LOAD DATA INTO `fiery-rarity-396614.ds_ebird_dwh_tmp.dwh_fact_weather_observations_tmp`
     (loc_id STRING, obsdt DATETIME, tavg FLOAT64, tmin FLOAT64, tmax FLOAT64, prcp FLOAT64,

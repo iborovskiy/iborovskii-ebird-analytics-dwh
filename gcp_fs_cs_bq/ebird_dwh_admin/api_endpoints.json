@@ -1,0 +1,9 @@
+{
+    "url_get_weather": "https://meteostat.p.rapidapi.com/point/daily?lat={}&lon={}&start={}&end={}&model=false",
+    "url_countries": "https://api.ebird.org/v2/ref/region/list/country/world",
+    "url_taxonomy": "https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&locale={}",
+    "url_sub_regions": "https://api.ebird.org/v2/ref/region/list/subnational1/{}",
+    "url_locs": "https://api.ebird.org/v2/ref/hotspot/{}?back={}&fmt=json",
+    "url_cl_ist": "https://api.ebird.org/v2/product/lists/{}/{}/{}/{}?maxResults=200",
+    "url_get_cl": "https://api.ebird.org/v2/product/checklist/view/{}"
+}

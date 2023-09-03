@@ -54,10 +54,11 @@ def load_dwh_from_stg(*args, **kwargs):
     # - Truncate temporary observation table after successful model's update
     # - Update current high_water_mark on success of current DAG
 
+    exp_time = (datetime.datetime.now() + datetime.timedelta(minutes = 2)).astimezone() # Temp tables expiration (10 min)
+
     if DWH_INTERNAL_MODEL == False:
         # Use several SQL queries in single transaction
         print("Use external load mode of STG")
-        exp_time = (datetime.datetime.now() + datetime.timedelta(minutes = 2)).astimezone() # Temp tables expiration (10 min)
 
         # Import new batch of data into temporary dataset
         query_job = client.query(sq.dwh_load_taxonomy_dict_bq_sql.format(exp_time)) # BigQuery API request
